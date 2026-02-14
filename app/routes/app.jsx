@@ -21,8 +21,12 @@ export default function App() {
         <Frame>
           <s-app-nav>
             <s-link href="/app/product_tag">Product tag</s-link>
+            <s-link href="/app/add_discount_price">Add discount price</s-link>
+            <s-link href="/app/remove_discount_price">
+              Remove discount price
+            </s-link>
             <s-link href="/app/create_metafield">Create metafield</s-link>
-            <s-link href="/app/add_metafield">Add metafield</s-link>
+            <s-link href="/app/add_metafield">Update metafield</s-link>
           </s-app-nav>
           <Outlet />
         </Frame>
@@ -31,7 +35,6 @@ export default function App() {
   );
 }
 
-// Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
   return boundary.error(useRouteError());
 }

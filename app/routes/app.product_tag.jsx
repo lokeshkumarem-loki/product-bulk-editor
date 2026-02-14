@@ -1,7 +1,3 @@
-// =====================================================
-// ProductTag.jsx - COMPLETE WITH PROGRESS OVERLAY
-// =====================================================
-
 import {
   Page,
   Card,
@@ -14,102 +10,159 @@ import {
   IndexFilters,
   useSetIndexFiltersMode,
   ChoiceList,
-  Banner,
   Modal,
-  ProgressBar,
-  InlineStack,
-  Spinner,
   Button,
   Frame,
-  LegacyStack,
   TextField,
+  Toast,
+  Banner,
+  InlineStack,
+  Spinner,
+  Combobox,
+  Listbox,
+  Pagination,
 } from "@shopify/polaris";
-import fs from "fs";
 import { ImageIcon } from "@shopify/polaris-icons";
 import { authenticate } from "../shopify.server";
 import { getProductInDB } from "./server/services/product";
-import { jsonlConvert } from "./utils/jsonlConvertor";
+import { ProductCollection } from "./server/db/model";
 import {
   useLoaderData,
   useActionData,
   useSubmit,
   useNavigation,
+  useRevalidator,
 } from "react-router";
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { PRODUCT_UPDATE_MUTATION } from "./queries/tagMutation";
+import { useState, useCallback, useMemo, useEffect } from "react";
 
-// =====================================================
-// ACTION
-// =====================================================
+const ITEMS_PER_PAGE = 50;
+
 export async function action({ request }) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const shop = session.shop;
 
   try {
     const formData = await request.formData();
+    const actionType = formData.get("actionType");
     const tag = formData.get("tag");
     const products = JSON.parse(formData.get("products") || "[]");
 
-    const productIds = products.map((p) => p.id);
+    if (!products.length) {
+      return { success: false, error: "No products selected" };
+    }
 
-    // 1️⃣ Create JSONL
-    const { filePath } = await jsonlConvert(productIds, tag);
-
-    // 2️⃣ Create staged upload
-    const STAGED_UPLOAD_MUTATION = `
-      mutation {
-        stagedUploadsCreate(input: [{
-          resource: BULK_MUTATION_VARIABLES,
-          filename: "productData.jsonl",
-          mimeType: "text/jsonl",
-          httpMethod: POST
-        }]) {
-          stagedTargets {
-            url
-            resourceUrl
-            parameters {
-              name
-              value
-            }
+    const PRODUCT_UPDATE_MUTATION = `
+      mutation productUpdate($input: ProductInput!) {
+        productUpdate(input: $input) {
+          product {
+            id
+            tags
           }
           userErrors {
+            field
             message
           }
         }
       }
     `;
 
-    const stagedRes = await admin.graphql(STAGED_UPLOAD_MUTATION);
-    const stagedJson = await stagedRes.json();
-    const target = stagedJson.data.stagedUploadsCreate.stagedTargets[0];
+    let successCount = 0;
+    let errorCount = 0;
+    const errors = [];
 
-    const uploadForm = new FormData();
-    target.parameters.forEach(({ name, value }) =>
-      uploadForm.append(name, value),
-    );
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < products.length; i += BATCH_SIZE) {
+      const batch = products.slice(i, i + BATCH_SIZE);
 
-    uploadForm.append("file", fs.createReadStream(filePath));
+      const batchPromises = batch.map(async (product) => {
+        try {
+          let updatedTags;
+          if (actionType === "add") {
+            updatedTags = product.tags.includes(tag)
+              ? product.tags
+              : [...product.tags, tag];
+          } else {
+            updatedTags = product.tags.filter((t) => t !== tag);
+          }
 
-    await fetch(target.url, {
-      method: "POST",
-      body: uploadForm,
-    });
+          const response = await admin.graphql(PRODUCT_UPDATE_MUTATION, {
+            variables: {
+              input: {
+                id: product.id,
+                tags: updatedTags,
+              },
+            },
+          });
 
-    const stagedUploadPath = target.parameters.find(
-      (p) => p.name === "key",
-    ).value;
+          const json = await response.json();
 
-    await admin.graphql(PRODUCT_UPDATE_MUTATION(stagedUploadPath));
-    fs.unlinkSync(filePath);
-    return { success: true };
+          if (json.data?.productUpdate?.userErrors?.length > 0) {
+            const error = json.data.productUpdate.userErrors[0];
+            throw new Error(`${error.field}: ${error.message}`);
+          }
+
+          successCount++;
+          await updateLocalDB(shop, product.id, updatedTags);
+
+          return { success: true, productId: product.id };
+        } catch (error) {
+          errorCount++;
+          errors.push(`${product.id}: ${error.message}`);
+          return {
+            success: false,
+            productId: product.id,
+            error: error.message,
+          };
+        }
+      });
+
+      await Promise.all(batchPromises);
+
+      if (i + BATCH_SIZE < products.length) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+
+    if (errorCount > 0) {
+      return {
+        success: false,
+        partialSuccess: successCount > 0,
+        message: `Updated ${successCount} products, but ${errorCount} failed`,
+        error: errors.slice(0, 3).join(", ") + (errors.length > 3 ? "..." : ""),
+        count: successCount,
+      };
+    }
+
+    return {
+      success: true,
+      message: `Successfully ${actionType === "add" ? "added" : "removed"} tag "${tag}" ${actionType === "add" ? "to" : "from"} ${successCount} product${successCount > 1 ? "s" : ""}`,
+      count: successCount,
+    };
   } catch (error) {
-    console.error("Bulk tag update failed:", error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.message || "An unexpected error occurred",
+    };
   }
 }
 
-// =====================================================
-// LOADER
-// =====================================================
+async function updateLocalDB(shop, productId, tags) {
+  try {
+    const ProductCol = await ProductCollection();
+    await ProductCol.updateOne(
+      { shop, productId },
+      {
+        $set: {
+          tags: tags,
+          syncedAt: new Date().toLocaleString(),
+        },
+      },
+    );
+  } catch (error) {
+    console.error("❌ Failed to update local DB:", error);
+  }
+}
+
 export async function loader({ request }) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
@@ -134,78 +187,65 @@ export async function loader({ request }) {
 
     return { rows, error: null };
   } catch (error) {
-    console.error("ProductTag loader error:", error);
     return { rows: [], error: error.message };
   }
 }
 
-// =====================================================
-// COMPONENT
-// =====================================================
 export default function ProductTag() {
   const { rows = [], error = null } = useLoaderData() || {};
   const [tag, setTag] = useState("");
   const actionData = useActionData();
   const submit = useSubmit();
   const navigation = useNavigation();
-  const tagManagerRef = useRef(null);
+  const revalidator = useRevalidator();
 
-  // model state
-  const [active, setActive] = useState(true);
-
-  const handleAddTagModelToggle = useCallback(
-    () => setActive(!active),
-    [active],
-  );
-
-  // Check if form is submitting
   const isSubmitting = navigation.state === "submitting";
 
-  // States
+  const [toastActive, setToastActive] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastError, setToastError] = useState(false);
+
+  const [addTagModalActive, setAddTagModalActive] = useState(false);
+  const [removeTagModalActive, setRemoveTagModalActive] = useState(false);
+
   const [queryValue, setQueryValue] = useState("");
   const [statusFilter, setStatusFilter] = useState([]);
   const [vendorFilter, setVendorFilter] = useState([]);
   const [typeFilter, setTypeFilter] = useState([]);
   const [categoryFilter, setCategoryFilter] = useState([]);
   const [collectionFilter, setCollectionFilter] = useState([]);
+  const [tagFilter, setTagFilter] = useState([]);
   const [sortSelected, setSortSelected] = useState(["title-asc"]);
   const [taggedWith, setTaggedWith] = useState("");
-  const [bannerVisible, setBannerVisible] = useState(false);
   const [selectedResources, setSelectedResources] = useState([]);
-  const [isProcessing, setIsProcessing] = useState(false);
 
-  // Progress modal state
-  const [progressModalOpen, setProgressModalOpen] = useState(false);
-  const [operationInfo, setOperationInfo] = useState({
-    tag: "",
-    action: "",
-    count: 0,
-  });
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+
   const { mode, setMode } = useSetIndexFiltersMode();
 
-  // Show/hide progress modal based on submission state
-  useEffect(() => {
-    if (isSubmitting) {
-      setProgressModalOpen(true);
-    }
-  }, [isSubmitting]);
-
-  // Handle action response
   useEffect(() => {
     if (actionData) {
-      setProgressModalOpen(false);
-      setBannerVisible(true);
+      if (actionData.success || actionData.partialSuccess) {
+        setToastMessage(actionData.message);
+        setToastError(false);
+        setToastActive(true);
 
-      // Auto-hide banner after 7 seconds
-      const timer = setTimeout(() => {
-        setBannerVisible(false);
-      }, 7000);
-
-      return () => clearTimeout(timer);
+        setAddTagModalActive(false);
+        setRemoveTagModalActive(false);
+        setTag("");
+        setSelectedResources([]);
+        setTimeout(() => {
+          revalidator.revalidate();
+        }, 1000);
+      } else {
+        setToastMessage(actionData.error || "An error occurred");
+        setToastError(true);
+        setToastActive(true);
+      }
     }
-  }, [actionData]);
+  }, [actionData, revalidator]);
 
-  // Filter options
   const filterOptions = useMemo(() => {
     const statuses = [...new Set(rows.map((r) => r.status))].filter(
       (s) => s && s !== "—",
@@ -219,6 +259,14 @@ export default function ProductTag() {
     const categories = [...new Set(rows.map((r) => r.category))].filter(
       (c) => c && c !== "—",
     );
+    const tags = [
+      ...new Set(
+        rows
+          .flatMap((r) => (Array.isArray(r.tags) ? r.tags : []))
+          .map((t) => t.trim())
+          .filter(Boolean),
+      ),
+    ];
     const allCols = rows.flatMap((r) => r.collections);
     const collections = [
       ...new Map(allCols.map((c) => [c.id || c.title, c])).values(),
@@ -229,6 +277,7 @@ export default function ProductTag() {
       vendors: vendors.map((v) => ({ label: v, value: v })),
       types: types.map((t) => ({ label: t, value: t })),
       categories: categories.map((c) => ({ label: c, value: c })),
+      tags: tags.map((t) => ({ label: t, value: t })),
       collections: collections.map((c) => ({
         label: c.title,
         value: c.id || c.title,
@@ -236,7 +285,6 @@ export default function ProductTag() {
     };
   }, [rows]);
 
-  // Filter & sort
   const filteredAndSortedRows = useMemo(() => {
     let filtered = [...rows];
 
@@ -264,6 +312,15 @@ export default function ProductTag() {
       filtered = filtered.filter((r) => typeFilter.includes(r.productType));
     if (categoryFilter.length)
       filtered = filtered.filter((r) => categoryFilter.includes(r.category));
+    if (tagFilter.length) {
+      filtered = filtered.filter(
+        (r) =>
+          Array.isArray(r.tags) &&
+          r.tags.some((tag) =>
+            tagFilter.some((f) => tag.toLowerCase() === f.toLowerCase()),
+          ),
+      );
+    }
     if (collectionFilter.length) {
       filtered = filtered.filter((r) =>
         r.collections.some(
@@ -301,22 +358,56 @@ export default function ProductTag() {
     statusFilter,
     vendorFilter,
     typeFilter,
+    tagFilter,
     categoryFilter,
     collectionFilter,
     sortSelected,
   ]);
 
-  // Selection
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredAndSortedRows.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const paginatedRows = filteredAndSortedRows.slice(startIndex, endIndex);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    queryValue,
+    statusFilter,
+    vendorFilter,
+    typeFilter,
+    categoryFilter,
+    collectionFilter,
+    tagFilter,
+  ]);
+
   const handleSelectionChange = useCallback(
-    (selectionType, isSelecting, selection) => {
+    (selectionType, toggleType, selection) => {
       if (selectionType === "all") {
+        // Select ALL products across all pages
         setSelectedResources(
-          isSelecting ? filteredAndSortedRows.map((r) => r.id) : [],
+          selectedResources.length === filteredAndSortedRows.length
+            ? []
+            : filteredAndSortedRows.map((r) => r.id),
         );
       } else if (selectionType === "page") {
-        setSelectedResources(
-          isSelecting ? filteredAndSortedRows.map((r) => r.id) : [],
-        );
+        // Select all on current page
+        const pageIds = paginatedRows.map((r) => r.id);
+        if (toggleType) {
+          const newSelections = [...selectedResources];
+          pageIds.forEach((id) => {
+            if (!selectedResources.includes(id)) {
+              newSelections.push(id);
+            }
+          });
+          setSelectedResources(newSelections);
+        } else {
+          setSelectedResources(
+            selectedResources.filter((id) => !pageIds.includes(id)),
+          );
+        }
       } else if (selectionType === "single") {
         setSelectedResources((prev) =>
           prev.includes(selection)
@@ -325,15 +416,18 @@ export default function ProductTag() {
         );
       }
     },
-    [filteredAndSortedRows],
+    [filteredAndSortedRows, paginatedRows, selectedResources],
   );
 
-  // Reset selection on filter change
+  // Select all products (across all pages)
+  const handleSelectAllProducts = useCallback(() => {
+    setSelectedResources(filteredAndSortedRows.map((r) => r.id));
+  }, [filteredAndSortedRows]);
+
   useEffect(() => {
     setSelectedResources([]);
   }, [
     queryValue,
-
     statusFilter,
     vendorFilter,
     typeFilter,
@@ -341,36 +435,47 @@ export default function ProductTag() {
     collectionFilter,
   ]);
 
-  // Handle tag submission
   const handleTagSubmit = useCallback(
     (actionType) => {
       if (!tag || !tag.trim()) return;
       if (selectedResources.length === 0) return;
-      setIsProcessing(true);
+
+      const selectedProducts = rows.filter((r) =>
+        selectedResources.includes(r.id),
+      );
+
       const formData = new FormData();
       formData.append("actionType", actionType);
       formData.append("tag", tag.trim());
-      formData.append("products", JSON.stringify(selectedResources));
+      formData.append(
+        "products",
+        JSON.stringify(
+          selectedProducts.map((p) => ({
+            id: p.id,
+            tags: p.tags,
+          })),
+        ),
+      );
+
       submit(formData, { method: "post" });
-      setIsProcessing(false);
     },
-    [selectedResources, submit],
+    [tag, selectedResources, rows, submit],
   );
 
-  // Get selected products with tags
   const selectedProductsWithTags = useMemo(
     () => rows.filter((row) => selectedResources.includes(row.id)),
     [rows, selectedResources],
   );
 
-  // Handle remove tag
-  const handleRemoveTag = useCallback(() => {
-    if (tagManagerRef.current) {
-      tagManagerRef.current.openRemove(selectedProductsWithTags);
-    }
+  const commonTags = useMemo(() => {
+    if (selectedProductsWithTags.length === 0) return [];
+    const tagSet = new Set();
+    selectedProductsWithTags.forEach((product) => {
+      product.tags.forEach((t) => tagSet.add(t));
+    });
+    return Array.from(tagSet).sort();
   }, [selectedProductsWithTags]);
 
-  // Clear filters
   const handleClearAll = useCallback(() => {
     setQueryValue("");
     setTaggedWith("");
@@ -381,7 +486,6 @@ export default function ProductTag() {
     setCollectionFilter([]);
   }, []);
 
-  // Applied filters
   const appliedFilters = [];
   if (statusFilter.length)
     appliedFilters.push({
@@ -407,6 +511,12 @@ export default function ProductTag() {
       label: disambiguateLabel("Category", categoryFilter),
       onRemove: () => setCategoryFilter([]),
     });
+  if (tagFilter.length)
+    appliedFilters.push({
+      key: "tags",
+      label: disambiguateLabel("Tags", tagFilter),
+      onRemove: () => setTagFilter([]),
+    });
   if (collectionFilter.length) {
     const names = filterOptions.collections
       .filter((c) => collectionFilter.includes(c.value))
@@ -424,7 +534,6 @@ export default function ProductTag() {
       onRemove: () => setTaggedWith(""),
     });
 
-  // Filters
   const filters = [
     {
       key: "vendor",
@@ -500,15 +609,29 @@ export default function ProductTag() {
         />
       ),
     },
+    {
+      key: "tag",
+      label: "Tag",
+      filter: (
+        <ChoiceList
+          title="Tag"
+          titleHidden
+          choices={filterOptions.tags}
+          selected={tagFilter}
+          onChange={setTagFilter}
+          allowMultiple
+        />
+      ),
+    },
   ];
 
-  // Rows
-  const rowMarkup = filteredAndSortedRows.map((row, index) => (
+  const rowMarkup = paginatedRows.map((row, index) => (
     <IndexTable.Row
       id={row.id}
       key={row.id}
       position={index}
       selected={selectedResources.includes(row.id)}
+      disabled={isSubmitting}
     >
       <IndexTable.Cell>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -548,17 +671,6 @@ export default function ProductTag() {
     </IndexTable.Row>
   ));
 
-  // Bulk actions
-  // const promotedBulkActions = [
-  //   { content: "Add Tag", onAction: () => tagManagerRef.current?.openAdd() },
-  //   {
-  //     content: "Remove Tag",
-  //     onAction: handleRemoveTag,
-  //     disabled: selectedResources.length === 0,
-  //   },
-  // ];
-
-  // Early returns
   if (error) {
     return (
       <Page title="Products" fullWidth>
@@ -578,7 +690,7 @@ export default function ProductTag() {
 
   if (!rows || rows.length === 0) {
     return (
-      <Page title="Products" fullWidth>
+      <Page title="Products tag" fullWidth>
         <Card>
           <EmptyState
             heading="No products found"
@@ -593,145 +705,192 @@ export default function ProductTag() {
     );
   }
 
-  // Render
+  const toastMarkup = toastActive ? (
+    <Toast
+      content={toastMessage}
+      onDismiss={() => setToastActive(false)}
+      error={toastError}
+      duration={5000}
+    />
+  ) : null;
+
   return (
-    <Page title="Products" fullWidth>
-      {bannerVisible && actionData && (
-        <div style={{ marginBottom: "16px" }}>
-          <Banner
-            title={actionData.success ? "Success" : "Error"}
-            tone={actionData.success ? "success" : "critical"}
-            onDismiss={() => setBannerVisible(false)}
+    <Frame>
+      <Page title="Products tags" fullWidth>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "end",
+            gap: "8px",
+            marginBottom: "12px",
+          }}
+        >
+          <Button
+            onClick={() => setAddTagModalActive(true)}
+            disabled={selectedResources.length === 0 || isSubmitting}
           >
-            <BlockStack gap="200">
-              <p>
-                {actionData.success ? actionData.message : actionData.error}
-              </p>
-              {actionData.stats && (
-                <Text variant="bodySm" tone="subdued" as="p">
-                  Updated: {actionData.stats.updated} | Failed:{" "}
-                  {actionData.stats.failed} | Time:{" "}
-                  {(actionData.stats.timeMs / 1000).toFixed(1)}s
-                </Text>
-              )}
-            </BlockStack>
-          </Banner>
+            Add Tag
+          </Button>
+          <Button
+            tone="critical"
+            onClick={() => setRemoveTagModalActive(true)}
+            disabled={selectedResources.length === 0 || isSubmitting}
+          >
+            Remove Tag
+          </Button>
         </div>
-      )}
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "end",
-          gap: "8px",
-          marginBottom: "12px",
-        }}
-      >
-        <Button onClick={handleAddTagModelToggle}>Add Tag</Button>
-        <Button tone="critical">Remove Tag</Button>
-      </div>
+        <div style={{ marginBottom: "18px" }}>
+          <Card padding="0">
+            <div style={{ padding: "12px", borderBottom: "1px solid #E1E3E5" }}>
+              <InlineStack gap="200" align="end" blockAlign="center">
+                {selectedResources.length < filteredAndSortedRows.length && (
+                  <Button
+                    size="slim"
+                    onClick={handleSelectAllProducts}
+                    disabled={isSubmitting}
+                  >
+                    Select all {filteredAndSortedRows.length} product
+                    {filteredAndSortedRows.length !== 1 ? "s" : ""}
+                  </Button>
+                )}
+                {selectedResources.length === filteredAndSortedRows.length &&
+                  filteredAndSortedRows.length > 0 && (
+                    <Button
+                      size="slim"
+                      onClick={() => setSelectedResources([])}
+                      disabled={isSubmitting}
+                    >
+                      Deselect all
+                    </Button>
+                  )}
+              </InlineStack>
+            </div>
 
-      <Card padding="0">
-        <IndexFilters
-          sortOptions={[
-            { label: "Title", value: "title-asc", directionLabel: "A-Z" },
-            { label: "Title", value: "title-desc", directionLabel: "Z-A" },
-            { label: "Vendor", value: "vendor-asc", directionLabel: "A-Z" },
-            { label: "Vendor", value: "vendor-desc", directionLabel: "Z-A" },
-            { label: "Type", value: "productType-asc", directionLabel: "A-Z" },
-            { label: "Type", value: "productType-desc", directionLabel: "Z-A" },
-          ]}
-          sortSelected={sortSelected}
-          queryValue={queryValue}
-          queryPlaceholder="Searching all products"
-          onQueryChange={setQueryValue}
-          onQueryClear={() => setQueryValue("")}
-          onSort={setSortSelected}
-          filters={filters}
-          appliedFilters={appliedFilters}
-          onClearAll={handleClearAll}
-          mode={mode}
-          setMode={setMode}
-          tabs={[
-            {
-              id: "all-products",
-              content: "All",
-              accessibilityLabel: "All products",
-              panelID: "all-products-content",
-            },
-          ]}
-          selected={0}
-          canCreateNewView={false}
+            <IndexFilters
+              sortOptions={[
+                { label: "Title", value: "title-asc", directionLabel: "A-Z" },
+                { label: "Title", value: "title-desc", directionLabel: "Z-A" },
+                { label: "Vendor", value: "vendor-asc", directionLabel: "A-Z" },
+                {
+                  label: "Vendor",
+                  value: "vendor-desc",
+                  directionLabel: "Z-A",
+                },
+                {
+                  label: "Type",
+                  value: "productType-asc",
+                  directionLabel: "A-Z",
+                },
+                {
+                  label: "Type",
+                  value: "productType-desc",
+                  directionLabel: "Z-A",
+                },
+              ]}
+              sortSelected={sortSelected}
+              queryValue={queryValue}
+              queryPlaceholder="Searching all products"
+              onQueryChange={setQueryValue}
+              onQueryClear={() => setQueryValue("")}
+              onSort={setSortSelected}
+              filters={filters}
+              appliedFilters={appliedFilters}
+              onClearAll={handleClearAll}
+              mode={mode}
+              setMode={setMode}
+              tabs={[
+                {
+                  id: "all-products",
+                  content: `All (${rows.length})`,
+                  accessibilityLabel: "All products",
+                  panelID: "all-products-content",
+                },
+              ]}
+              selected={0}
+              canCreateNewView={false}
+            />
+
+            {/* Select All Button */}
+
+            <IndexTable
+              resourceName={{ singular: "product", plural: "products" }}
+              itemCount={paginatedRows.length}
+              selectedItemsCount={
+                selectedResources.length === filteredAndSortedRows.length
+                  ? "All"
+                  : selectedResources.length
+              }
+              onSelectionChange={handleSelectionChange}
+              headings={[
+                { title: "Product" },
+                { title: "Status" },
+                { title: "Vendor" },
+                { title: "Type" },
+                { title: "Category" },
+                { title: "Collections" },
+              ]}
+              hasZebraStriping
+            >
+              {rowMarkup}
+            </IndexTable>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div
+                style={{
+                  padding: "16px",
+                  borderTop: "1px solid #E1E3E5",
+                  display: "flex",
+                  justifyContent: "center",
+                }}
+              >
+                <Pagination
+                  hasPrevious={currentPage > 1}
+                  onPrevious={() => setCurrentPage(currentPage - 1)}
+                  hasNext={currentPage < totalPages}
+                  onNext={() => setCurrentPage(currentPage + 1)}
+                  label={`Page ${currentPage} of ${totalPages}`}
+                />
+              </div>
+            )}
+          </Card>
+        </div>
+        <AddTagModal
+          selectedResources={selectedResources}
+          handleClose={() => {
+            setAddTagModalActive(false);
+            setTag("");
+          }}
+          tag={tag}
+          setTag={setTag}
+          handleTagSubmit={() => handleTagSubmit("add")}
+          active={addTagModalActive}
+          isProcessing={isSubmitting}
+          allTags={filterOptions.tags.map((t) => t.value)}
         />
 
-        <IndexTable
-          resourceName={{ singular: "product", plural: "products" }}
-          itemCount={filteredAndSortedRows.length}
-          selectedItemsCount={selectedResources.length}
-          onSelectionChange={handleSelectionChange}
-          headings={[
-            { title: "Product" },
-            { title: "Status" },
-            { title: "Vendor" },
-            { title: "Type" },
-            { title: "Category" },
-            { title: "Collections" },
-          ]}
-          hasZebraStriping
-        >
-          {rowMarkup}
-        </IndexTable>
-      </Card>
+        <RemoveTagModal
+          selectedResources={selectedResources}
+          selectedProducts={selectedProductsWithTags}
+          commonTags={commonTags}
+          handleClose={() => {
+            setRemoveTagModalActive(false);
+            setTag("");
+          }}
+          tag={tag}
+          setTag={setTag}
+          handleTagSubmit={() => handleTagSubmit("remove")}
+          active={removeTagModalActive}
+          isProcessing={isSubmitting}
+        />
 
-      {/* Progress Modal */}
-      <Modal
-        open={progressModalOpen}
-        onClose={() => {}} // Prevent closing during operation
-        title={`${operationInfo.action === "add" ? "Adding" : "Removing"} Tag`}
-        primaryAction={null}
-        secondaryActions={[]}
-      >
-        <Modal.Section>
-          <BlockStack gap="400">
-            <Text variant="bodyMd" as="p">
-              {operationInfo.action === "add" ? "Adding" : "Removing"} tag "
-              {operationInfo.tag}"{" "}
-              {operationInfo.action === "add" ? "to" : "from"}{" "}
-              {operationInfo.count} product
-              {operationInfo.count === 1 ? "" : "s"}...
-            </Text>
-
-            <ProgressBar progress={75} size="medium" tone="primary" />
-
-            <InlineStack gap="200" align="center">
-              <Spinner size="small" />
-              <Text variant="bodySm" tone="subdued" as="p">
-                Processing in batches (10 products per batch)...
-              </Text>
-            </InlineStack>
-
-            <Text variant="bodySm" tone="subdued" as="p">
-              This may take a moment for large selections. Please don't close
-              this window.
-            </Text>
-          </BlockStack>
-        </Modal.Section>
-      </Modal>
-
-      <AddTagModel
-        selectedReasources={selectedResources}
-        handleClose={handleAddTagModelToggle}
-        tag={tag}
-        setTag={setTag}
-        handleTagSubmit={handleTagSubmit}
-        active={active}
-        isProcessing={isProcessing}
-      />
-    </Page>
+        {toastMarkup}
+      </Page>
+    </Frame>
   );
 }
 
-// Helpers
 function disambiguateLabel(key, value) {
   return `${key}: ${(Array.isArray(value) ? value : [value]).map(capitalize).join(", ")}`;
 }
@@ -754,57 +913,174 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 }
 
-const AddTagModel = ({
+const AddTagModal = ({
   tag,
   setTag,
-  handleSubmitTag,
+  handleTagSubmit,
   handleClose,
   active,
-  selectedReasources,
+  selectedResources,
+  isProcessing,
+  allTags,
+}) => {
+  const [options, setOptions] = useState([]);
+
+  const updateText = useCallback(
+    (value) => {
+      setTag(value);
+      if (value === "") {
+        setOptions([]);
+        return;
+      }
+
+      const filterRegex = new RegExp(value, "i");
+      const resultOptions = allTags
+        .filter((t) => t.match(filterRegex))
+        .slice(0, 10);
+      setOptions(resultOptions);
+    },
+    [allTags, setTag],
+  );
+
+  const optionsMarkup =
+    options.length > 0
+      ? options.map((option) => <Listbox.Option key={option} value={option} />)
+      : null;
+
+  return (
+    <Modal
+      open={active}
+      onClose={handleClose}
+      loading={isProcessing}
+      title="Add tags"
+      primaryAction={{
+        content: isProcessing ? "Adding..." : "Add",
+        onAction: handleTagSubmit,
+        disabled: selectedResources.length === 0 || !tag.trim(),
+        loading: isProcessing,
+      }}
+      secondaryActions={[
+        {
+          content: "Cancel",
+          onAction: handleClose,
+          disabled: isProcessing,
+        },
+      ]}
+    >
+      <Modal.Section>
+        <BlockStack gap="400">
+          <Text variant="bodyMd" tone="subdued" as="p">
+            {selectedResources.length === 0
+              ? "No product selected"
+              : `Add a tag to ${selectedResources.length} selected product${selectedResources.length > 1 ? "s" : ""}`}
+          </Text>
+
+          <Combobox
+            activator={
+              <Combobox.TextField
+                label="Tag"
+                value={tag}
+                onChange={updateText}
+                placeholder="Enter tag name..."
+                autoComplete="off"
+                disabled={selectedResources.length === 0 || isProcessing}
+              />
+            }
+          >
+            {optionsMarkup && (
+              <Listbox onSelect={updateText}>{optionsMarkup}</Listbox>
+            )}
+          </Combobox>
+
+          {allTags.length > 0 && !tag && (
+            <Text variant="bodySm" tone="subdued">
+              Popular tags: {allTags.slice(0, 5).join(", ")}
+              {allTags.length > 5 && ` (+${allTags.length - 5} more)`}
+            </Text>
+          )}
+        </BlockStack>
+      </Modal.Section>
+    </Modal>
+  );
+};
+
+const RemoveTagModal = ({
+  tag,
+  setTag,
+  handleTagSubmit,
+  handleClose,
+  active,
+  selectedResources,
+  selectedProducts,
+  commonTags,
   isProcessing,
 }) => {
   return (
-    <div style={{ height: "500px" }}>
-      <Frame>
-        <Modal
-          open={active}
-          onClose={handleClose}
-          loading={isProcessing}
-          title="Add tags"
-          primaryAction={{
-            content: "Add",
-            onAction: handleSubmitTag,
-            disabled: selectedReasources.length == 0 || tag.length == 0,
-          }}
-          secondaryActions={[
-            {
-              content: "Cancel",
-              onAction: handleClose,
-            },
-          ]}
-        >
-          <Modal.Section>
-            <LegacyStack vertical>
-              <LegacyStack.Item>
-                <Text variant="bodyMd" tone="subdued" as="p">
-                  {selectedReasources.length == 0
-                    ? "No product selected, filter or select product"
-                    : `Add a tag to ${selectedReasources.length} selected product${selectedReasources.length > 1 ? "s" : ""}.`}
-                </Text>
-              </LegacyStack.Item>
-              <LegacyStack.Item>
-                <TextField
-                  value={tag}
-                  onChange={(e) => setTag(e)}
-                  disabled={selectedReasources.length == 0}
-                  placeholder="Summer offer, New sale..."
-                  label="Tag"
-                />
-              </LegacyStack.Item>
-            </LegacyStack>
-          </Modal.Section>
-        </Modal>
-      </Frame>
-    </div>
+    <Modal
+      open={active}
+      onClose={handleClose}
+      loading={isProcessing}
+      title="Remove tags"
+      primaryAction={{
+        content: isProcessing ? "Removing..." : "Remove",
+        onAction: handleTagSubmit,
+        disabled: selectedResources.length === 0 || !tag.trim(),
+        loading: isProcessing,
+        destructive: true,
+      }}
+      secondaryActions={[
+        {
+          content: "Cancel",
+          onAction: handleClose,
+          disabled: isProcessing,
+        },
+      ]}
+    >
+      <Modal.Section>
+        <BlockStack gap="400">
+          <Text variant="bodyMd" tone="subdued" as="p">
+            {selectedResources.length === 0
+              ? "No product selected"
+              : `Remove a tag from ${selectedResources.length} selected product${selectedResources.length > 1 ? "s" : ""}`}
+          </Text>
+
+          {commonTags.length > 0 && (
+            <>
+              <Text variant="bodySm" fontWeight="semibold">
+                Common tags in selected products (click to select):
+              </Text>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {commonTags.map((t) => (
+                  <Button
+                    key={t}
+                    size="slim"
+                    onClick={() => setTag(t)}
+                    variant={tag === t ? "primary" : undefined}
+                    disabled={isProcessing}
+                  >
+                    {t}
+                  </Button>
+                ))}
+              </div>
+            </>
+          )}
+
+          <TextField
+            label="Tag to remove"
+            value={tag}
+            onChange={(e) => setTag(e)}
+            disabled={selectedResources.length === 0 || isProcessing}
+            placeholder="Click tag above or type..."
+            autoComplete="off"
+          />
+
+          {commonTags.length === 0 && selectedResources.length > 0 && (
+            <Text variant="bodySm" tone="subdued">
+              No common tags found in selected products
+            </Text>
+          )}
+        </BlockStack>
+      </Modal.Section>
+    </Modal>
   );
 };

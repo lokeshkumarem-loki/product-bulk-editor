@@ -14,26 +14,25 @@ import { InfoIcon } from "@shopify/polaris-icons";
 import { useState, useEffect } from "react";
 import { authenticate } from "../shopify.server.js";
 import { useSubmit, useActionData } from "react-router";
-import {
-  FieldTypeSelect,
-  OwnerTypeSelection,
-} from "./components/TypeFieldSelector.jsx";
+import { FieldTypeSelect } from "./components/TypeFieldSelector.jsx";
 import { CREATEMETAFIELDQUERY } from "./queries/metafieldQueries.jsx";
+import { syncMetafield } from "./server/services/metaField.js";
 
 export async function action({ request }) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const shop = session.shop;
   const formData = await request.formData();
 
   const name = formData.get("name");
   const description = formData.get("description");
-  const ownerType = formData.get("ownerType");
   const type = formData.get("type");
+  const ownerType = "PRODUCT";
   const isVisibleStoreFront = formData.get("isVisibleStoreFront");
   const namespacekey = formData.get("namespacekey");
 
   const [namespace, key] = namespacekey.split(".");
 
-  if (!name || !type || !ownerType || !namespace || !key) {
+  if (!name || !type || !namespace || !key) {
     return {
       success: false,
       errors: [
@@ -66,12 +65,20 @@ export async function action({ request }) {
       return { success: false, errors };
     }
 
+    const payload = {
+      shop,
+      namespace,
+      name,
+      ownerType,
+      type,
+      key,
+    };
+    await syncMetafield(payload);
     return {
       success: true,
       metafield: result.data.metafieldDefinitionCreate.createdDefinition,
     };
   } catch (error) {
-    console.error("Metafield creation error:", error);
     return {
       success: false,
       errors: [{ message: error.message || "Failed to create metafield" }],
@@ -88,13 +95,10 @@ export default function AddMetaFieldsPage() {
   const [description, setDescription] = useState("");
   const [namespacekey, setNamespacekey] = useState("custom.");
   const [namespaceError, setNamespaceError] = useState("");
-  const [ownerType, setOwnerType] = useState("PRODUCT");
   const [loading, setLoading] = useState(false);
   const [enabled, setEnabled] = useState(false);
-
   const VALID_KEY_REGEX = /^[a-z0-9_-]+\.[a-z0-9_-]+$/;
 
-  // Auto-generate namespace.key from name
   const handleNameChange = (value) => {
     setName(value);
 
@@ -102,15 +106,14 @@ export default function AddMetaFieldsPage() {
       const formattedKey = value
         .toLowerCase()
         .trim()
-        .replace(/[^a-z0-9_-\s]/g, "") // Remove invalid chars
-        .replace(/\s+/g, "_"); // Replace spaces with underscores
+        .replace(/[^a-z0-9_-\s]/g, "")
+        .replace(/\s+/g, "_");
 
       setNamespacekey(`custom.${formattedKey}`);
       validateNamespaceKey(`custom.${formattedKey}`);
     }
   };
 
-  // Validate namespace.key
   const validateNamespaceKey = (value) => {
     if (!value || value === "custom.") {
       setNamespaceError("Namespace and key is required");
@@ -136,15 +139,6 @@ export default function AddMetaFieldsPage() {
     setNamespacekey(value);
     validateNamespaceKey(value);
   };
-
-  const ownerTypeOptions = [
-    { label: "Product", value: "PRODUCT" },
-    { label: "Variant", value: "VARIANT" },
-    { label: "Collection", value: "COLLECTION" },
-    { label: "Customer", value: "CUSTOMER" },
-    { label: "Order", value: "ORDER" },
-    { label: "Shop", value: "SHOP" },
-  ];
 
   const typeOptions = [
     {
@@ -201,21 +195,16 @@ export default function AddMetaFieldsPage() {
   ];
 
   const handleSubmit = () => {
-    // Final validation
     if (!validateNamespaceKey(namespacekey)) {
       return;
     }
-
     if (!name.trim()) {
       return;
     }
-
     setLoading(true);
-
     const formData = new FormData();
     formData.append("name", name.trim());
     formData.append("description", description.trim());
-    formData.append("ownerType", ownerType);
     formData.append("type", fieldData);
     formData.append("namespacekey", namespacekey.toLowerCase());
     formData.append("isVisibleStoreFront", enabled.toString());
@@ -231,7 +220,6 @@ export default function AddMetaFieldsPage() {
       setDescription("");
       setNamespacekey("custom.");
       setFieldData("single_line_text_field");
-      setOwnerType("PRODUCT");
       setEnabled(false);
       setShowBanner(true);
     } else if (actionData?.success === false) {
@@ -297,23 +285,11 @@ export default function AddMetaFieldsPage() {
             requiredIndicator
           />
 
-          {/* Type and Owner Type */}
-          <InlineStack gap="400" align="start" blockAlign="start">
-            <div style={{ flex: 1 }}>
-              <FieldTypeSelect
-                TYPE_OPTIONS={typeOptions}
-                value={fieldData}
-                onChange={setFieldData}
-              />
-            </div>
-
-            <div style={{ flex: 1 }}>
-              <OwnerTypeSelection
-                onChange={setOwnerType}
-                options={ownerTypeOptions}
-              />
-            </div>
-          </InlineStack>
+          <FieldTypeSelect
+            TYPE_OPTIONS={typeOptions}
+            value={fieldData}
+            onChange={setFieldData}
+          />
 
           {/* Description */}
           <TextField

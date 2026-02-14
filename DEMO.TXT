@@ -1,0 +1,83 @@
+
+import fs from "fs";
+import path from "path";
+import { getProductInDB } from "../server/services/product";
+
+const normalizeProductId = (id) => {
+  if (!id) return null;
+  const str = String(id);
+  return str.includes("gid://") ? str.split("/").pop() : str;
+};
+
+const toProductGid = (id) => `gid://shopify/Product/${id}`;
+
+export const jsonlConvert = async (
+  shop,
+  records = [],
+  tag,
+  actionType, // "add" | "remove"
+) => {
+  const safeIds = Array.isArray(records) ? records : [];
+  const trimmedTag = (tag || "").trim();
+
+  if (!trimmedTag) throw new Error("Tag is required");
+  if (!["add", "remove"].includes(actionType))
+    throw new Error("Invalid actionType");
+
+  const localProducts = await getProductInDB(shop);
+
+  const processedProducts = safeIds
+    .map((rawId) => {
+      const normalizedId = normalizeProductId(rawId);
+
+      const product = localProducts.find(
+        (p) => normalizeProductId(p.productId) === normalizedId,
+      );
+
+      if (!product) return null;
+
+      const currentTags = Array.isArray(product.tags) ? product.tags : [];
+      let updatedTags;
+
+      if (actionType === "add") {
+        if (currentTags.includes(trimmedTag)) return null;
+        updatedTags = [...currentTags, trimmedTag];
+      }
+
+      if (actionType === "remove") {
+        if (!currentTags.includes(trimmedTag)) return null;
+        updatedTags = currentTags.filter((t) => t !== trimmedTag);
+      }
+
+      return {
+        input: {
+          id: toProductGid(normalizedId), // ✅ ALWAYS VALID
+          tags: updatedTags,
+        },
+      };
+    })
+    .filter(Boolean);
+
+  if (!processedProducts.length) {
+    return {
+      filePath: null,
+      count: 0,
+      message: "No products require updates",
+    };
+  }
+
+  const content = processedProducts
+    .map((row) => JSON.stringify(row))
+    .join("\n");
+
+  const dirPath = path.join(process.cwd(), "app", "routes", "jsonl");
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+
+  const filePath = path.join(dirPath, `product-tags-${actionType}.jsonl`);
+  fs.writeFileSync(filePath, content, "utf8");
+
+  return {
+    filePath,
+    count: processedProducts.length,
+  };
+};

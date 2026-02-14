@@ -1,39 +1,23 @@
-  import {
-    ProductCollection,
-    StoreCollection,
-    VariantCollection,
-    MetafieldCollection,
-  } from "../db/model";
+import {
+  ProductCollection,
+  VariantCollection,
+  MetafieldCollection,
+} from "../db/model.js";
 
-  export const storeAndSyncData = async (
-    shop,
-    products = [],
-    variants = [],
-    metafields = [],
-  ) => {
-    if (!shop) throw new Error("Shop domain is required");
-
-    const storeCollection = await StoreCollection();
+export const storeAndSyncData = async (
+  shop,
+  products = [],
+  variants = [],
+  metafields = [],
+) => {
+  try {
     const productCollection = await ProductCollection();
     const variantCollection = await VariantCollection();
     const metafieldCollection = await MetafieldCollection();
 
-    // Update store sync timestamp
-    await storeCollection.updateOne(
-      { shop },
-      {
-        $set: {
-          shop,
-          lastSyncAt: new Date().toLocaleTimeString(), // You can replace with local system time if needed
-        },
-      },
-      { upsert: true },
-    );
-
-    /* ================= PRODUCTS ================= */
     if (products.length) {
       const productOps = products.map((p) => {
-        const firstImage = p?.featuredImage?.url;
+        const firstImage = p.productImage || "";
 
         return {
           updateOne: {
@@ -46,15 +30,15 @@
                 title: p.title ?? null,
                 vendor: p.vendor ?? null,
                 status: p.status ?? null,
-                productImage: firstImage ?? "",
+                productImage: firstImage,
                 productType: p.productType ?? null,
                 tags: Array.isArray(p.tags) ? p.tags : [],
-                category: p.category?.name ?? null,
-                collections: Array.isArray(p.collections?.edges)
-                  ? p.collections.edges.map((c) => ({
-                      id: c.node?.id ?? null,
-                      title: c.node?.title ?? null,
-                      handle: c.node?.handle ?? null,
+                category: p.category ?? null,
+                collections: Array.isArray(p.collections)
+                  ? p.collections.map((c) => ({
+                      id: c.id ?? null,
+                      title: c.title ?? null,
+                      handle: c.handle ?? null,
                     }))
                   : [],
                 createdAt: p.createdAt
@@ -72,30 +56,33 @@
       });
 
       if (productOps.length) {
-        await productCollection.bulkWrite(productOps, { ordered: false });
+        await productCollection.bulkWrite(productOps, {
+          ordered: false,
+        });
       }
     }
 
-    /* ================= VARIANTS ================= */
     if (variants.length) {
       const variantOps = variants.map((v) => ({
         updateOne: {
-          filter: { shop, variantId: v.id },
+          filter: {
+            shop,
+            variantId: v.id,
+          },
           update: {
             $set: {
               shop,
               variantId: v.id,
               productId: v.productId ?? null,
-              title: v.title ?? null,
-              sku: v.sku ?? null,
+              variantTitle: v.title ?? null,
+              productTitle: v.productTitle ?? null,
+              productType: v.productType ?? null,
+              tags: Array.isArray(v.tags) ? v.tags : [],
               price: v.price !== undefined ? Number(v.price) : null,
               compareAtPrice:
-                v.compareAtPrice !== undefined ? Number(v.compareAtPrice) : null,
-              inventoryQuantity: v.inventoryQuantity ?? null,
-              availableForSale: v.availableForSale ?? null,
-              option1: v.option1 ?? null,
-              option2: v.option2 ?? null,
-              option3: v.option3 ?? null,
+                v.compareAtPrice !== undefined
+                  ? Number(v.compareAtPrice)
+                  : null,
               image: v.image?.url ?? "",
               syncedAt: new Date().toLocaleString(),
             },
@@ -105,31 +92,30 @@
       }));
 
       if (variantOps.length) {
-        await variantCollection.bulkWrite(variantOps, { ordered: false });
+        await variantCollection.bulkWrite(variantOps, {
+          ordered: false,
+        });
       }
     }
 
-    /* ================= METAFIELDS ================= */
     if (metafields.length) {
       const metafieldOps = metafields
-        .filter((mf) => mf?.key && mf?.ownerId && mf?.ownerType)
+        .filter((mf) => mf && mf.key)
         .map((mf) => ({
           updateOne: {
             filter: {
               shop,
-              ownerId: mf.ownerId,
-              ownerType: mf.ownerType, // PRODUCT | VARIANT
+              namespace: mf.namespace,
               key: mf.key,
             },
             update: {
               $set: {
                 shop,
-                ownerId: mf.ownerId,
-                ownerType: mf.ownerType,
+                name: mf.name ?? null,
                 namespace: mf.namespace ?? null,
-                key: mf.key ?? null,
-                value: mf.value ?? null,
+                key: mf.key,
                 type: mf.type ?? null,
+                ownerType: mf.ownerType ?? "PRODUCT",
                 syncedAt: new Date().toLocaleString(),
               },
             },
@@ -137,10 +123,16 @@
           },
         }));
 
-      if (metafieldOps.length) {
-        await metafieldCollection.bulkWrite(metafieldOps, { ordered: false });
+      if (metafieldOps.length > 0) {
+        await metafieldCollection.bulkWrite(metafieldOps, {
+          ordered: false,
+        });
       }
     }
 
     return true;
-  };
+  } catch (error) {
+    console.error("❌ Error in storeAndSyncData:", error);
+    throw error;
+  }
+};

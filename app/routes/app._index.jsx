@@ -20,16 +20,16 @@ import {
   VariantIcon,
 } from "@shopify/polaris-icons";
 import {
-  FETCH_METAFIELDS,
   FETCH_PRODUCTS,
-  FETCH_VARIANTS,
+  FETCH_METAFIELD_DEFINITIONS,
   getQueryStatus,
 } from "./queries/productQueries.jsx";
 import { authenticate } from "../shopify.server.js";
 import { storeAndSyncData } from "./server/services/storeAndSync.js";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useNavigate, useLoaderData, replace } from "react-router";
-import { ensureBulkFinishWebhook } from "./actions/webHooksInit.js";
+import { useNavigate, useLoaderData } from "react-router";
+import { StoreCollection } from "./server/db/model.js";
+import { CURRENCY_CODE_QUERY } from "./queries/productQueries.jsx";
 
 export async function loader({ request }) {
   try {
@@ -39,8 +39,31 @@ export async function loader({ request }) {
     const url = new URL(request.url);
     const step = url.searchParams.get("step");
     const operationId = url.searchParams.get("operationId");
+    const storeCurrencyData = await admin.graphql(CURRENCY_CODE_QUERY);
+    const storeCurrencyJson = await storeCurrencyData.json();
+    const currencyCode = storeCurrencyJson.data.shop.currencyCode;
 
-    await ensureBulkFinishWebhook(admin, process.env.APP_URL);
+    const Store = await StoreCollection();
+
+    await Store.findOneAndUpdate(
+      { shop },
+      {
+        $set: {
+          currencyCode,
+          mutationContext: {
+            type: "",
+            actionType: "",
+            metafield: {},
+            tag: "",
+            productIds: [],
+            varientIds: [],
+          },
+        },
+      },
+      { upsert: true, new: true },
+    );
+
+    // ================= CHECK OPERATION STATUS =================
     if (operationId) {
       const statusRes = await admin.graphql(getQueryStatus(operationId));
       const statusJson = await statusRes.json();
@@ -50,8 +73,7 @@ export async function loader({ request }) {
         return { status: "ERROR", error: "Invalid operation ID" };
       }
 
-      console.log("Bulk operation status:", bulk.status);
-
+      // Still running
       if (bulk.status !== "COMPLETED") {
         return {
           status: bulk.status,
@@ -60,11 +82,14 @@ export async function loader({ request }) {
         };
       }
 
+      // No URL means no results
       if (!bulk.url) {
-        return { status: "ERROR", error: "No bulk URL returned" };
+        return {
+          status: "ERROR",
+          error: `No data found for ${step}. Your store might be empty.`,
+        };
       }
 
-      console.log("Fetching bulk data from:", bulk.url);
       const file = await fetch(bulk.url);
       const text = await file.text();
 
@@ -75,69 +100,113 @@ export async function loader({ request }) {
           try {
             return JSON.parse(l);
           } catch (e) {
-            console.error("Failed to parse line:", e);
             return null;
           }
         })
         .filter(Boolean);
 
-      console.log(`Parsed ${rows.length} rows for step: ${step}`);
-
-      // ================= STEP HANDLERS =================
       if (step === "PRODUCTS") {
-        // Filter only products (not nested data)
-        const products = rows.filter(
-          (r) => r.id?.includes("Product") && !r.__parentId,
-        );
+        const products = [];
+        const variantMap = new Map();
+        const collectionMap = new Map();
 
-        console.log(`Found ${products.length} products to store`);
-        console.log("Sample product:", JSON.stringify(products[0], null, 2));
+        rows.forEach((row) => {
+          const id = row.id || "";
 
-        await storeAndSyncData(shop, products, [], []);
+          if (id.includes("/Product/") && !row.__parentId) {
+            products.push(row);
+          }
+          // Variant (child of product)
+          else if (id.includes("/ProductVariant/")) {
+            const productId = row.__parentId;
+            if (!variantMap.has(productId)) {
+              variantMap.set(productId, []);
+            }
+            variantMap.get(productId).push(row);
+          }
+          // Collection (child of product)
+          else if (id.includes("/Collection/")) {
+            const productId = row.__parentId;
+            if (!collectionMap.has(productId)) {
+              collectionMap.set(productId, []);
+            }
+            collectionMap.get(productId).push(row);
+          }
+        });
 
-        return {
-          nextStep: "VARIANTS",
-          status: "STEP_COMPLETED",
-          count: products.length,
-        };
-      }
+        const enrichedProducts = products.map((p) => {
+          const productVariants = variantMap.get(p.id) || [];
+          const productCollections = collectionMap.get(p.id) || [];
 
-      if (step === "VARIANTS") {
-        // Filter only variants
-        const variants = rows
-          .filter((r) => r.id?.includes("ProductVariant"))
-          .map((v) => ({
-            ...v,
-            productId: v.__parentId, // Add productId from __parentId
-          }));
+          const firstImage =
+            p.featuredImage?.url ||
+            productVariants.find((v) => v.image?.url)?.image?.url ||
+            "";
 
-        console.log(`Found ${variants.length} variants to store`);
-        console.log("Sample variant:", JSON.stringify(variants[0], null, 2));
+          return {
+            id: p.id,
+            handle: p.handle ?? null,
+            title: p.title ?? null,
+            vendor: p.vendor ?? null,
+            status: p.status ?? null,
+            productImage: firstImage,
+            productType: p.productType ?? null,
+            tags: Array.isArray(p.tags) ? p.tags : [],
+            category: p.category?.name ?? null,
+            collections: productCollections.map((c) => ({
+              id: c.id ?? null,
+              title: c.title ?? null,
+              handle: c.handle ?? null,
+            })),
+            createdAt: p.createdAt ?? null,
+            updatedAt: p.updatedAt ?? null,
+          };
+        });
 
-        await storeAndSyncData(shop, [], variants, []);
+        // Extract all variants with product context
+        const allVariants = [];
+        products.forEach((product) => {
+          const productVariants = variantMap.get(product.id) || [];
+          productVariants.forEach((v) => {
+            allVariants.push({
+              id: v.id,
+              productId: product.id,
+              title: v.title ?? null,
+              productTitle: product.title ?? null,
+              productType: product.productType ?? null,
+              tags: Array.isArray(product.tags) ? product.tags : [],
+              price: v.price ?? null,
+              compareAtPrice: v.compareAtPrice ?? null,
+              image: v.image ?? null,
+            });
+          });
+        });
+
+        await storeAndSyncData(shop, enrichedProducts, allVariants, []);
 
         return {
           nextStep: "METAFIELDS",
           status: "STEP_COMPLETED",
-          count: variants.length,
+          count: enrichedProducts.length,
+          variantCount: allVariants.length,
         };
       }
 
       if (step === "METAFIELDS") {
-        // Map metafields with proper structure
-        const metafields = rows.map((mf) => ({
-          ...mf,
-          ownerId: mf.__parentId,
-          ownerType: mf.__parentId?.includes("Variant") ? "VARIANT" : "PRODUCT",
-        }));
+        const metafields = rows
+          .filter((r) => r.id?.includes("/MetafieldDefinition/"))
+          .map((mf) => ({
+            id: mf.id,
+            name: mf.name ?? null,
+            namespace: mf.namespace ?? null,
+            key: mf.key ?? null,
+            type: mf.type?.name ?? null,
+            ownerType: "PRODUCT",
+          }));
 
-        console.log(`Found ${metafields.length} metafields to store`);
-        console.log(
-          "Sample metafield:",
-          JSON.stringify(metafields[0], null, 2),
-        );
-
-        await storeAndSyncData(shop, [], [], metafields);
+        if (metafields.length > 0) {
+          await storeAndSyncData(shop, [], [], metafields);
+        }
 
         return {
           status: "DONE",
@@ -152,34 +221,30 @@ export async function loader({ request }) {
     if (!step) return { status: "IDLE" };
 
     let mutation;
-    if (step === "PRODUCTS") mutation = FETCH_PRODUCTS;
-    else if (step === "VARIANTS") mutation = FETCH_VARIANTS;
-    else if (step === "METAFIELDS") mutation = FETCH_METAFIELDS;
-    else return { status: "ERROR", error: `Invalid step: ${step}` };
-
-    console.log(`Starting bulk operation for step: ${step}`);
+    if (step === "PRODUCTS") {
+      mutation = FETCH_PRODUCTS;
+    } else if (step === "METAFIELDS") {
+      mutation = FETCH_METAFIELD_DEFINITIONS;
+    } else {
+      return { status: "ERROR", error: `Invalid step: ${step}` };
+    }
 
     const startRes = await admin.graphql(mutation);
     const startJson = await startRes.json();
 
-    console.log("Start response:", JSON.stringify(startJson, null, 2));
-
-    // Check for errors
     if (startJson.errors) {
-      console.error("GraphQL errors:", startJson.errors);
       return {
         status: "ERROR",
         error: `GraphQL Error: ${startJson.errors[0]?.message || "Unknown error"}`,
       };
     }
 
-    // Check for user errors
     if (startJson.data?.bulkOperationRunQuery?.userErrors?.length > 0) {
       const userError = startJson.data.bulkOperationRunQuery.userErrors[0];
-      console.error("User error:", userError);
+
       return {
         status: "ERROR",
-        error: `${userError.field}: ${userError.message}`,
+        error: `${userError.field || "Error"}: ${userError.message}`,
       };
     }
 
@@ -189,15 +254,12 @@ export async function loader({ request }) {
       return { status: "ERROR", error: "No operation ID returned" };
     }
 
-    console.log("Operation started successfully:", operationIdResult);
-
     return {
       status: "STARTED",
       step,
       operationId: operationIdResult,
     };
   } catch (error) {
-    console.error("Loader error:", error);
     return {
       status: "ERROR",
       error: error.message ?? "Unexpected error",
@@ -217,6 +279,7 @@ export default function Index() {
   const [error, setError] = useState(null);
   const [currentOperationId, setCurrentOperationId] = useState(null);
   const [itemCount, setItemCount] = useState(0);
+  const [variantCount, setVariantCount] = useState(0);
   const pollingTimeoutRef = useRef(null);
 
   // Cleanup polling on unmount
@@ -228,14 +291,12 @@ export default function Index() {
     };
   }, []);
 
-  // Polling function with better control
+  // Polling function
   const pollStatus = useCallback(
     (operationId, currentStep) => {
       if (!loading) {
-        console.log("Polling stopped - loading is false");
         return;
       }
-      console.log("Polling status for:", { operationId, currentStep });
       navigate(`?operationId=${operationId}&step=${currentStep}`);
     },
     [loading, navigate],
@@ -244,9 +305,6 @@ export default function Index() {
   // Handle loader data updates
   useEffect(() => {
     if (!loaderData) return;
-
-    console.log("=== Loader data received ===", loaderData);
-
     // Clear any existing polling timeout
     if (pollingTimeoutRef.current) {
       clearTimeout(pollingTimeoutRef.current);
@@ -255,7 +313,6 @@ export default function Index() {
 
     // Handle errors
     if (loaderData.status === "ERROR") {
-      console.error("Error received:", loaderData.error);
       setError(loaderData.error || "An error occurred");
       setStatusText("Sync failed");
       setLoading(false);
@@ -264,9 +321,8 @@ export default function Index() {
 
     // Handle operation started
     if (loaderData.status === "STARTED") {
-      console.log("Operation started:", loaderData.operationId);
       setCurrentOperationId(loaderData.operationId);
-      setStatusText(`Started syncing ${loaderData.step.toLowerCase()}...`);
+      setStatusText(`Starting syncing...`);
 
       // Start polling after 2 seconds
       pollingTimeoutRef.current = setTimeout(() => {
@@ -274,16 +330,13 @@ export default function Index() {
       }, 2000);
     }
 
-    // Handle in-progress statuses (RUNNING, CREATED, etc.)
+    // Handle in-progress statuses
     if (
       loaderData.status === "RUNNING" ||
       loaderData.status === "CREATED" ||
       loaderData.status === "CANCELING"
     ) {
-      const objectCount = loaderData.objectCount || 0;
-      setStatusText(
-        `Syncing ${step?.toLowerCase() || "data"}... (${objectCount} items processed)`,
-      );
+      setStatusText("Processing data....");
 
       // Continue polling every 3 seconds
       pollingTimeoutRef.current = setTimeout(() => {
@@ -294,18 +347,14 @@ export default function Index() {
     // Handle step completed
     if (loaderData.status === "STEP_COMPLETED") {
       const count = loaderData.count || 0;
-      setItemCount((prev) => prev + count);
+      const vCount = loaderData.variantCount || 0;
 
-      if (loaderData.nextStep === "VARIANTS") {
-        setProgress(33);
-        setStatusText(`${count} products synced! Now syncing variants...`);
-        pollingTimeoutRef.current = setTimeout(
-          () => startSync("VARIANTS"),
-          1000,
-        );
-      } else if (loaderData.nextStep === "METAFIELDS") {
-        setProgress(66);
-        setStatusText(`${count} variants synced! Now syncing metafields...`);
+      setItemCount((prev) => prev + count);
+      setVariantCount((prev) => prev + vCount);
+
+      if (loaderData.nextStep === "METAFIELDS") {
+        setProgress(50);
+        setStatusText(`Synced halfway...`);
         pollingTimeoutRef.current = setTimeout(
           () => startSync("METAFIELDS"),
           1000,
@@ -316,12 +365,9 @@ export default function Index() {
     // Handle completion
     if (loaderData.status === "DONE") {
       const count = loaderData.count || 0;
-      const totalCount = itemCount + count;
-      setItemCount(totalCount);
+      setItemCount((prev) => prev + count);
       setProgress(100);
-      setStatusText(
-        `Sync completed successfully! ${totalCount} items synced 🎉`,
-      );
+      setStatusText(`🎉 Sync completed!`);
       setLoading(false);
 
       pollingTimeoutRef.current = setTimeout(() => {
@@ -331,19 +377,19 @@ export default function Index() {
           setProgress(0);
           setStep(null);
           setItemCount(0);
+          setVariantCount(0);
           setCurrentOperationId(null);
         }, 500);
-      }, 2000);
+      }, 3000);
     }
 
-    // Handle canceled
+    // Handle canceled/failed
     if (loaderData.status === "CANCELED") {
       setError("Sync was canceled");
       setStatusText("Sync canceled");
       setLoading(false);
     }
 
-    // Handle failed
     if (loaderData.status === "FAILED") {
       setError("Bulk operation failed");
       setStatusText("Sync failed");
@@ -354,7 +400,6 @@ export default function Index() {
 
   /* ================= START SYNC ================= */
   function startSync(currentStep) {
-    console.log("=== Starting sync ===", currentStep);
     setLoading(true);
     setStep(currentStep);
     setStatusText(`Starting ${currentStep.toLowerCase()} sync...`);
@@ -364,6 +409,7 @@ export default function Index() {
     if (currentStep === "PRODUCTS") {
       setProgress(0);
       setItemCount(0);
+      setVariantCount(0);
     }
 
     // Clear any existing timeout
@@ -372,9 +418,10 @@ export default function Index() {
       pollingTimeoutRef.current = null;
     }
 
-    // Use navigate to load data
+    // Navigate to trigger loader
     navigate(`?step=${currentStep}`);
   }
+
   const clearUrlParams = () => {
     navigate(
       {
@@ -384,17 +431,18 @@ export default function Index() {
       { replace: true },
     );
   };
+
   const handleModalClose = () => {
     if (!loading) {
-      console.log("Modal closed");
       setModalActive(false);
       setError(null);
       setProgress(0);
       setStep(null);
       setItemCount(0);
+      setVariantCount(0);
       setCurrentOperationId(null);
 
-      // Clear any polling timeout
+      // Clear polling timeout
       if (pollingTimeoutRef.current) {
         clearTimeout(pollingTimeoutRef.current);
         pollingTimeoutRef.current = null;
@@ -404,7 +452,6 @@ export default function Index() {
   };
 
   const handleCancelSync = () => {
-    console.log("Sync cancelled by user");
     setLoading(false);
     setStatusText("Cancelling sync...");
 
@@ -440,6 +487,7 @@ export default function Index() {
               variant="primary"
               onClick={() => startSync("PRODUCTS")}
               icon={UploadIcon}
+              disabled={loading}
             >
               {loading ? "Syncing..." : "Start Sync"}
             </Button>
@@ -450,7 +498,8 @@ export default function Index() {
         <BlockStack gap="200">
           <Text variant="headingMd">How it works</Text>
           <Text tone="subdued">
-            Data is synced step-by-step to ensure reliability and accuracy.
+            Data is synced in two steps: products with variants, then metafield
+            definitions.
           </Text>
         </BlockStack>
 
@@ -463,20 +512,14 @@ export default function Index() {
         >
           <StepCard
             icon={UploadIcon}
-            title="Sync Products"
-            desc="Fetch products and variants from your store."
-          />
-
-          <StepCard
-            icon={VariantIcon}
-            title="Sync Variants"
-            desc="Fetch and store all variant-level information."
+            title="Sync Products & Variants"
+            desc="Fetch all products and their variants in one query."
           />
 
           <StepCard
             icon={EditIcon}
-            title="Sync Metafields"
-            desc="Store product and variant metafields efficiently."
+            title="Sync Metafield Definitions"
+            desc="Store product metafield schemas for bulk editing."
           />
 
           <StepCard
@@ -487,14 +530,20 @@ export default function Index() {
 
           <StepCard
             icon={ProductIcon}
-            title="Bulk Edit"
-            desc="Update tags, prices, and metafields in bulk."
+            title="Bulk Edit Tags"
+            desc="Update tags across multiple products at once."
           />
 
           <StepCard
             icon={PriceListIcon}
-            title="Price Automation"
-            desc="Manage discounts and compare-at prices easily."
+            title="Price Management"
+            desc="Manage prices and compare-at prices in bulk."
+          />
+
+          <StepCard
+            icon={VariantIcon}
+            title="Variant Updates"
+            desc="Apply changes to specific variants across products."
           />
         </div>
 
@@ -504,7 +553,7 @@ export default function Index() {
             <Text variant="headingSm">Data-first bulk editing</Text>
             <Text tone="subdued">
               Your store data is synced safely before any bulk changes are
-              applied.
+              applied. Products and variants are fetched together for accuracy.
             </Text>
           </BlockStack>
         </Card>
@@ -544,24 +593,6 @@ export default function Index() {
                 </InlineStack>
 
                 <ProgressBar progress={progress} size="small" tone="primary" />
-
-                <BlockStack gap="200">
-                  <Text variant="bodySm" tone="subdued">
-                    Progress: {progress}%
-                  </Text>
-                  <Text variant="bodySm" tone="subdued">
-                    Current Syncing: {step || "Initializing..."}
-                  </Text>
-                  {itemCount === 0 ? (
-                    <Text variant="bodySm" tone="subdued">
-                      Items start processing...
-                    </Text>
-                  ) : (
-                    <Text variant="bodySm" tone="subdued">
-                      Items synced: {itemCount}
-                    </Text>
-                  )}
-                </BlockStack>
               </>
             )}
           </BlockStack>
@@ -575,7 +606,7 @@ export default function Index() {
 function StepCard({ icon, title, desc }) {
   return (
     <Card padding="400">
-      <InlineStack gap="300" align="start">
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
         <Icon source={icon} tone="base" />
         <BlockStack gap="100">
           <Text variant="headingSm" as="h3">
@@ -583,7 +614,7 @@ function StepCard({ icon, title, desc }) {
           </Text>
           <Text tone="subdued">{desc}</Text>
         </BlockStack>
-      </InlineStack>
+      </div>
     </Card>
   );
 }

@@ -1,3 +1,11 @@
+export const CURRENCY_CODE_QUERY = `
+{
+  shop {
+    currencyCode
+  }
+}
+`;
+
 export const FETCH_PRODUCTS = `
 mutation {
   bulkOperationRunQuery(
@@ -13,9 +21,26 @@ mutation {
             vendor
             productType
             tags
-            category { name }
+            createdAt
+            updatedAt
+            category {
+              name
+            }
             featuredImage {
               url
+            }
+            variants {
+              edges {
+                node {
+                  id
+                  title
+                  price
+                  compareAtPrice
+                  image {
+                    url
+                  }
+                }
+              }
             }
             collections {
               edges {
@@ -32,35 +57,32 @@ mutation {
     }
     """
   ) {
-    bulkOperation { id status }
-    userErrors { field message }
+    bulkOperation {
+      id
+      status
+    }
+    userErrors {
+      field
+      message
+    }
   }
 }
 `;
 
-export const FETCH_VARIANTS = `
+export const FETCH_METAFIELD_DEFINITIONS = `
 mutation {
   bulkOperationRunQuery(
     query: """
     {
-      products {
+      metafieldDefinitions(ownerType: PRODUCT, first: 250) {
         edges {
           node {
             id
-            variants {
-              edges {
-                node {
-                  id
-                  title
-                  sku
-                  price
-                  compareAtPrice
-                  availableForSale
-                  inventoryQuantity
-                  selectedOptions { name value }
-                  image { url }
-                }
-              }
+            name
+            namespace
+            key
+            type {
+              name
             }
           }
         }
@@ -68,40 +90,14 @@ mutation {
     }
     """
   ) {
-    bulkOperation { id status }
-    userErrors { field message }
-  }
-}
-`;
-
-export const FETCH_METAFIELDS = `
-mutation {
-  bulkOperationRunQuery(
-    query: """
-    {
-      products {
-        edges {
-          node {
-            id
-            metafields {
-              edges {
-                node {
-                  id
-                  namespace
-                  key
-                  value
-                  type
-                }
-              }
-            }
-          }
-        }
-      }
+    bulkOperation {
+      id
+      status
     }
-    """
-  ) {
-    bulkOperation { id status }
-    userErrors { field message }
+    userErrors {
+      field
+      message
+    }
   }
 }
 `;
@@ -124,7 +120,6 @@ export const getQueryStatus = (operationId) => `
   }
 `;
 
-// Alternative query that returns current running operation
 export const GET_CURRENT_BULK_OPERATION = `
   query {
     currentBulkOperation {
@@ -141,7 +136,6 @@ export const GET_CURRENT_BULK_OPERATION = `
   }
 `;
 
-// Cancel a bulk operation
 export const cancelBulkOperation = (operationId) => `
   mutation {
     bulkOperationCancel(id: "${operationId}") {
@@ -156,3 +150,7 @@ export const cancelBulkOperation = (operationId) => `
     }
   }
 `;
+
+export const FETCH_VARIANTS = FETCH_PRODUCTS;
+
+export const FETCH_METAFIELDS = FETCH_METAFIELD_DEFINITIONS;

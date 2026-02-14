@@ -1,32 +1,23 @@
 import { MetafieldCollection } from "../db/model";
 
-export const updateMetafieldsInDB = async (
-  shop,
-  ownerId,
-  ownerType,
-  metafields = [],
-) => {
-  if (!shop || !ownerId || !ownerType)
-    throw new Error("Shop, ownerId, and ownerType required");
-  if (!Array.isArray(metafields) || metafields.length === 0) return;
+export const syncMetafield = async (payload) => {
+  const { key, namespace, shop, name, ownerType, type } = payload;
 
   const metafieldCollection = await MetafieldCollection();
 
-  const ops = metafields.map((mf) => ({
-    updateOne: {
-      filter: { shop, ownerId, ownerType, key: mf.key },
-      update: {
-        $set: {
-          namespace: mf.namespace || null,
-          value: mf.value || null,
-          type: mf.type || null,
-          syncedAt: new Date(),
-        },
+  await metafieldCollection.updateOne(
+    { shop, namespace, key },
+    {
+      $set: {
+        name,
+        ownerType,
+        type,
+        shop,
+        namespace,
+        key,
+        syncedAt: new Date().toLocaleString(),
       },
-      upsert: true,
     },
-  }));
-
-  await metafieldCollection.bulkWrite(ops);
+    { upsert: true },
+  );
 };
-    
