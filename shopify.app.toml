@@ -2,12 +2,11 @@
 
 client_id = "d6f9784254385f1a6ac09d8b41cec44b"
 name = "Product bulk editor"
-application_url = "https://earnestminds.myshopify.com/admin/oauth/redirect_from_cli?client_id=d6f9784254385f1a6ac09d8b41cec44b"
+application_url = "https://product-bulk-editor.onrender.com"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-01"
@@ -31,4 +30,8 @@ optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ ]
+redirect_urls = [
+  "https://product-bulk-editor/auth/callback",
+  "https://product-bulk-editor/auth/shopify/callback",
+  "https://product-bulk-editor/api/auth/callback"
+ ]
