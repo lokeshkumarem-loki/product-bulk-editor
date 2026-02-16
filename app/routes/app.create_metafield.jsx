@@ -240,7 +240,7 @@ export default function AddMetaFieldsPage() {
     }
 
     setLoading(true);
-    setShowBanner(false); // Hide previous banners
+    setShowBanner(false);
 
     const formData = new FormData();
     formData.append("name", name.trim());
@@ -298,7 +298,6 @@ export default function AddMetaFieldsPage() {
       <div style={{ marginBottom: "18px" }}>
         <Card>
           <BlockStack gap="400">
-            {/* Name Field */}
             <TextField
               label="Name"
               value={name}
@@ -309,7 +308,6 @@ export default function AddMetaFieldsPage() {
               helpText="This will auto-generate the namespace and key below"
             />
 
-            {/* Namespace and Key */}
             <TextField
               label="Namespace and key"
               value={namespacekey}
@@ -331,7 +329,6 @@ export default function AddMetaFieldsPage() {
               onChange={setFieldData}
             />
 
-            {/* Description */}
             <TextField
               label="Description"
               value={description}
@@ -369,7 +366,6 @@ export default function AddMetaFieldsPage() {
               </BlockStack>
             </Card>
 
-            {/* Submit Button */}
             <Button
               variant="primary"
               loading={loading}

@@ -57,7 +57,6 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
     file_reference: FileIcon,
   };
 
-  // Sync input text when value changes externally
   useEffect(() => {
     const selectedOption = TYPE_OPTIONS.flatMap((group) => group.options).find(
       (option) => option.value === value,
@@ -93,9 +92,7 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
     [TYPE_OPTIONS, onChange],
   );
 
-  // ✅ FIX: Handle blur with delay to allow clicks
   const handleBlur = useCallback(() => {
-    // Small delay to allow option click to register
     setTimeout(() => {
       setActive(false);
     }, 200);
@@ -173,11 +170,9 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
             style={{
               maxHeight: "280px",
               overflowY: "auto",
-              // ✅ FIX: Prevent scroll from closing dropdown
               overscrollBehavior: "contain",
             }}
             onMouseDown={(e) => {
-              // ✅ FIX: Prevent blur when clicking inside dropdown
               e.preventDefault();
             }}
           >
