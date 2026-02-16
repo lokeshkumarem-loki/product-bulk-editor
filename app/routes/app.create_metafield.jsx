@@ -15,7 +15,10 @@ import { useState, useEffect } from "react";
 import { authenticate } from "../shopify.server.js";
 import { useSubmit, useActionData } from "react-router";
 import { FieldTypeSelect } from "./components/TypeFieldSelector.jsx";
-import { CREATEMETAFIELDQUERY } from "./queries/metafieldQueries.jsx";
+import {
+  CREATEMETAFIELDQUERY,
+  PIN_METAFIELD_DEFINITIONS,
+} from "./queries/metafieldQueries.jsx";
 import { syncMetafield } from "./server/services/metaField.js";
 
 export async function action({ request }) {
@@ -35,9 +38,7 @@ export async function action({ request }) {
   if (!name || !type || !namespace || !key) {
     return {
       success: false,
-      errors: [
-        { message: "Name, Namespace.Key, Type, and Owner Type are required" },
-      ],
+      errors: "Name, Namespace.Key, Type, and Owner Type are required",
     };
   }
 
@@ -59,11 +60,33 @@ export async function action({ request }) {
     });
 
     const result = await response.json();
-    const errors = result.data?.metafieldDefinitionCreate?.userErrors || [];
 
-    if (errors.length > 0) {
-      return { success: false, errors };
+    // ✅ FIX: Properly handle userErrors array
+    const userErrors =
+      result?.data?.metafieldDefinitionCreate?.userErrors || [];
+
+    if (userErrors.length > 0) {
+      // Convert array of error objects to a single string
+      const errorMessage = userErrors.map((err) => err.message).join(", ");
+      return { success: false, errors: errorMessage };
     }
+
+    const metafieldId =
+      result?.data?.metafieldDefinitionCreate?.createdDefinition?.id;
+
+    if (!metafieldId) {
+      return {
+        success: false,
+        errors: "Failed to create metafield - no ID returned",
+      };
+    }
+
+    // ✅ FIX: Use 'definitionId' instead of 'id'
+    await admin.graphql(PIN_METAFIELD_DEFINITIONS, {
+      variables: {
+        definitionId: metafieldId,
+      },
+    });
 
     const payload = {
       shop,
@@ -74,14 +97,16 @@ export async function action({ request }) {
       key,
     };
     await syncMetafield(payload);
+
     return {
       success: true,
       metafield: result.data.metafieldDefinitionCreate.createdDefinition,
     };
   } catch (error) {
+    console.error("❌ Metafield creation error:", error);
     return {
       success: false,
-      errors: [{ message: error.message || "Failed to create metafield" }],
+      errors: error.message || "Failed to create metafield",
     };
   }
 }
@@ -111,6 +136,9 @@ export default function AddMetaFieldsPage() {
 
       setNamespacekey(`custom.${formattedKey}`);
       validateNamespaceKey(`custom.${formattedKey}`);
+    } else {
+      setNamespacekey("custom.");
+      setNamespaceError("");
     }
   };
 
@@ -120,8 +148,16 @@ export default function AddMetaFieldsPage() {
       return false;
     }
 
+    // ✅ FIX: Changed from > 4 to < 8
+    if (value.length < 8) {
+      setNamespaceError(
+        "Key is too short (minimum 1 character after 'custom.')",
+      );
+      return false;
+    }
+
     if (!VALID_KEY_REGEX.test(value)) {
-      setNamespaceError("Use letters, numbers, underscores, and dashes");
+      setNamespaceError("Use letters, numbers, underscores, and dashes only");
       return false;
     }
 
@@ -136,8 +172,8 @@ export default function AddMetaFieldsPage() {
   };
 
   const handleNamespaceKeyChange = (value) => {
-    setNamespacekey(value);
-    validateNamespaceKey(value);
+    setNamespacekey(value.toLowerCase());
+    validateNamespaceKey(value.toLowerCase());
   };
 
   const typeOptions = [
@@ -198,10 +234,14 @@ export default function AddMetaFieldsPage() {
     if (!validateNamespaceKey(namespacekey)) {
       return;
     }
+
     if (!name.trim()) {
       return;
     }
+
     setLoading(true);
+    setShowBanner(false); // Hide previous banners
+
     const formData = new FormData();
     formData.append("name", name.trim());
     formData.append("description", description.trim());
@@ -221,6 +261,7 @@ export default function AddMetaFieldsPage() {
       setNamespacekey("custom.");
       setFieldData("single_line_text_field");
       setEnabled(false);
+      setNamespaceError("");
       setShowBanner(true);
     } else if (actionData?.success === false) {
       setLoading(false);
@@ -230,8 +271,9 @@ export default function AddMetaFieldsPage() {
 
   const isFormValid =
     name.trim().length > 0 &&
-    namespacekey.length > 7 && // "custom." is 7 chars
-    !namespaceError;
+    namespacekey.length >= 8 && // "custom.x" minimum
+    !namespaceError &&
+    !loading;
 
   return (
     <Page
@@ -242,32 +284,35 @@ export default function AddMetaFieldsPage() {
       {actionData?.success && showBanner && (
         <div style={{ marginBottom: "12px" }}>
           <Banner tone="success" onDismiss={() => setShowBanner(false)}>
-            <p>Metafield created successfully!</p>
+            <p>
+              ✓ Metafield <strong>{actionData.metafield?.name}</strong> created
+              successfully!
+            </p>
           </Banner>
         </div>
       )}
 
       {actionData?.success === false && showBanner && (
-        <Banner tone="critical" onDismiss={() => setShowBanner(false)}>
-          <p>
-            {actionData.errors?.[0]?.message || "Failed to create metafield"}
-          </p>
-        </Banner>
+        <div style={{ marginBottom: "12px" }}>
+          <Banner tone="critical" onDismiss={() => setShowBanner(false)}>
+            {/* ✅ FIX: Now errors is a string, not an object */}
+            <p>{actionData.errors || "Failed to create metafield"}</p>
+          </Banner>
+        </div>
       )}
 
       <Card>
         <BlockStack gap="400">
           {/* Name Field */}
-          <BlockStack gap="200">
-            <TextField
-              label="Name"
-              value={name}
-              onChange={handleNameChange}
-              placeholder="e.g., Product Expiry Date"
-              autoComplete="off"
-              requiredIndicator
-            />
-          </BlockStack>
+          <TextField
+            label="Name"
+            value={name}
+            onChange={handleNameChange}
+            placeholder="e.g., Product Expiry Date"
+            autoComplete="off"
+            requiredIndicator
+            helpText="This will auto-generate the namespace and key below"
+          />
 
           {/* Namespace and Key */}
           <TextField
@@ -277,7 +322,7 @@ export default function AddMetaFieldsPage() {
             error={namespaceError}
             helpText={
               !namespaceError
-                ? "Use letters, numbers, underscores, and dashes"
+                ? "Format: namespace.key (e.g., custom.product_expiry_date)"
                 : ""
             }
             placeholder="e.g., custom.product_expiry_date"
@@ -298,21 +343,27 @@ export default function AddMetaFieldsPage() {
             onChange={setDescription}
             placeholder="Optional description for this metafield"
             autoComplete="off"
+            multiline={3}
           />
 
           <Card>
-            <InlineStack align="space-between">
-              <InlineStack gap="100" align="center">
-                <Text as="h2" variant="headingSm">
-                  Options
-                </Text>
-                <Icon source={InfoIcon} tone="subdued" />
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="center">
+                <InlineStack gap="100" blockAlign="center">
+                  <Text as="h2" variant="headingSm">
+                    Options
+                  </Text>
+                  <Icon source={InfoIcon} tone="subdued" />
+                </InlineStack>
               </InlineStack>
-            </InlineStack>
 
-            <div style={{ marginTop: "12px" }}>
-              <InlineStack align="space-between" alignY="center">
-                <Text>Storefront API access</Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="100">
+                  <Text fontWeight="medium">Storefront API access</Text>
+                  <Text tone="subdued" variant="bodySm">
+                    Allow this metafield to be accessed via the Storefront API
+                  </Text>
+                </BlockStack>
                 <Checkbox
                   label="Storefront API access"
                   labelHidden
@@ -320,17 +371,18 @@ export default function AddMetaFieldsPage() {
                   onChange={setEnabled}
                 />
               </InlineStack>
-            </div>
+            </BlockStack>
           </Card>
+
           {/* Submit Button */}
           <Button
             variant="primary"
             loading={loading}
             fullWidth
             onClick={handleSubmit}
-            disabled={!isFormValid || loading}
+            disabled={!isFormValid}
           >
-            Add Metafield
+            {loading ? "Creating..." : "Add Metafield"}
           </Button>
         </BlockStack>
       </Card>

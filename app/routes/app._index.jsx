@@ -50,20 +50,11 @@ export async function loader({ request }) {
       {
         $set: {
           currencyCode,
-          mutationContext: {
-            type: "",
-            actionType: "",
-            metafield: {},
-            tag: "",
-            productIds: [],
-            varientIds: [],
-          },
         },
       },
       { upsert: true, new: true },
     );
 
-    // ================= CHECK OPERATION STATUS =================
     if (operationId) {
       const statusRes = await admin.graphql(getQueryStatus(operationId));
       const statusJson = await statusRes.json();
@@ -196,7 +187,6 @@ export async function loader({ request }) {
         const metafields = rows
           .filter((r) => r.id?.includes("/MetafieldDefinition/"))
           .map((mf) => ({
-            id: mf.id,
             name: mf.name ?? null,
             namespace: mf.namespace ?? null,
             key: mf.key ?? null,

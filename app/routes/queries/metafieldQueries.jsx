@@ -48,3 +48,17 @@ export const ADDMETAFIELDQUERY = `
     }
   }
 `;
+
+export const PIN_METAFIELD_DEFINITIONS = `
+  mutation PinMetafieldDefinition($definitionId: ID!) {
+    metafieldDefinitionPin(definitionId: $definitionId) {
+      pinnedDefinition {
+        id
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
