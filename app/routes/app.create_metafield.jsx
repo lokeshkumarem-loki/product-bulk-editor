@@ -276,11 +276,7 @@ export default function AddMetaFieldsPage() {
     !loading;
 
   return (
-    <Page
-      fullWidth
-      title="Add Metafield"
-      backAction={{ url: "/app/metafields" }}
-    >
+    <Page fullWidth title="Add Metafield">
       {actionData?.success && showBanner && (
         <div style={{ marginBottom: "12px" }}>
           <Banner tone="success" onDismiss={() => setShowBanner(false)}>
