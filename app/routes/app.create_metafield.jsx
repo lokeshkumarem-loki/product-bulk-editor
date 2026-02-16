@@ -295,97 +295,97 @@ export default function AddMetaFieldsPage() {
       {actionData?.success === false && showBanner && (
         <div style={{ marginBottom: "12px" }}>
           <Banner tone="critical" onDismiss={() => setShowBanner(false)}>
-            {/* ✅ FIX: Now errors is a string, not an object */}
             <p>{actionData.errors || "Failed to create metafield"}</p>
           </Banner>
         </div>
       )}
+      <div style={{ marginBottom: "18px" }}>
+        <Card>
+          <BlockStack gap="400">
+            {/* Name Field */}
+            <TextField
+              label="Name"
+              value={name}
+              onChange={handleNameChange}
+              placeholder="e.g., Product Expiry Date"
+              autoComplete="off"
+              requiredIndicator
+              helpText="This will auto-generate the namespace and key below"
+            />
 
-      <Card>
-        <BlockStack gap="400">
-          {/* Name Field */}
-          <TextField
-            label="Name"
-            value={name}
-            onChange={handleNameChange}
-            placeholder="e.g., Product Expiry Date"
-            autoComplete="off"
-            requiredIndicator
-            helpText="This will auto-generate the namespace and key below"
-          />
+            {/* Namespace and Key */}
+            <TextField
+              label="Namespace and key"
+              value={namespacekey}
+              onChange={handleNamespaceKeyChange}
+              error={namespaceError}
+              helpText={
+                !namespaceError
+                  ? "Format: namespace.key (e.g., custom.product_expiry_date)"
+                  : ""
+              }
+              placeholder="e.g., custom.product_expiry_date"
+              autoComplete="off"
+              requiredIndicator
+            />
 
-          {/* Namespace and Key */}
-          <TextField
-            label="Namespace and key"
-            value={namespacekey}
-            onChange={handleNamespaceKeyChange}
-            error={namespaceError}
-            helpText={
-              !namespaceError
-                ? "Format: namespace.key (e.g., custom.product_expiry_date)"
-                : ""
-            }
-            placeholder="e.g., custom.product_expiry_date"
-            autoComplete="off"
-            requiredIndicator
-          />
+            <FieldTypeSelect
+              TYPE_OPTIONS={typeOptions}
+              value={fieldData}
+              onChange={setFieldData}
+            />
 
-          <FieldTypeSelect
-            TYPE_OPTIONS={typeOptions}
-            value={fieldData}
-            onChange={setFieldData}
-          />
+            {/* Description */}
+            <TextField
+              label="Description"
+              value={description}
+              onChange={setDescription}
+              placeholder="Optional description for this metafield"
+              autoComplete="off"
+              multiline={3}
+            />
 
-          {/* Description */}
-          <TextField
-            label="Description"
-            value={description}
-            onChange={setDescription}
-            placeholder="Optional description for this metafield"
-            autoComplete="off"
-            multiline={3}
-          />
-
-          <Card>
-            <BlockStack gap="300">
-              <InlineStack align="space-between" blockAlign="center">
-                <InlineStack gap="100" blockAlign="center">
-                  <Text as="h2" variant="headingSm">
-                    Options
-                  </Text>
-                  <Icon source={InfoIcon} tone="subdued" />
+            <Card>
+              <BlockStack gap="300">
+                <InlineStack align="space-between" blockAlign="center">
+                  <InlineStack gap="100" blockAlign="center">
+                    <Text as="h2" variant="headingSm">
+                      Options
+                    </Text>
+                    <Icon source={InfoIcon} tone="subdued" />
+                  </InlineStack>
                 </InlineStack>
-              </InlineStack>
 
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="100">
-                  <Text fontWeight="medium">Storefront API access</Text>
-                  <Text tone="subdued" variant="bodySm">
-                    Allow this metafield to be accessed via the Storefront API
-                  </Text>
-                </BlockStack>
-                <Checkbox
-                  label="Storefront API access"
-                  labelHidden
-                  checked={enabled}
-                  onChange={setEnabled}
-                />
-              </InlineStack>
-            </BlockStack>
-          </Card>
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text fontWeight="medium">Storefront API access</Text>
+                    <Text tone="subdued" variant="bodySm">
+                      Allow this metafield to be accessed via the Storefront API
+                    </Text>
+                  </BlockStack>
+                  <Checkbox
+                    label="Storefront API access"
+                    labelHidden
+                    checked={enabled}
+                    onChange={setEnabled}
+                  />
+                </InlineStack>
+              </BlockStack>
+            </Card>
 
-          {/* Submit Button */}
-          <Button
-            variant="primary"
-            loading={loading}
-            fullWidth
-            onClick={handleSubmit}
-            disabled={!isFormValid}
-          >
-            {loading ? "Creating..." : "Add Metafield"}
-          </Button>
-        </BlockStack>
-      </Card>
+            {/* Submit Button */}
+            <Button
+              variant="primary"
+              loading={loading}
+              fullWidth
+              onClick={handleSubmit}
+              disabled={!isFormValid}
+            >
+              {loading ? "Creating..." : "Add Metafield"}
+            </Button>
+          </BlockStack>
+        </Card>
+      </div>
     </Page>
   );
 }

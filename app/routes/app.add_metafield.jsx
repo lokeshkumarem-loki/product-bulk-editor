@@ -175,6 +175,11 @@ function formatMetafieldValue(value, type) {
       return isNaN(intVal) ? trimmedValue : String(intVal);
 
     case "number_decimal":
+    case "rating":
+    case "weight":
+    case "volume":
+    case "dimension":
+    case "money":
       const floatVal = parseFloat(trimmedValue);
       return isNaN(floatVal) ? trimmedValue : String(floatVal);
 
@@ -190,18 +195,32 @@ function formatMetafieldValue(value, type) {
       }
 
     case "color":
-      return trimmedValue.toUpperCase();
+      // Remove # if present, Shopify stores without #
+      return trimmedValue.replace("#", "").toUpperCase();
 
-    case "rating":
-      const ratingVal = parseFloat(trimmedValue);
-      if (isNaN(ratingVal)) return trimmedValue;
-      return String(Math.min(5, Math.max(1, ratingVal)));
+    case "date_time":
+      // ✅ FIX: Ensure datetime has seconds
+      // Input: 2026-02-16T12:00 → Output: 2026-02-16T12:00:00
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmedValue)) {
+        return `${trimmedValue}:00`;
+      }
+      return trimmedValue;
 
     case "date":
-    case "date_time":
     case "url":
     case "single_line_text_field":
     case "multi_line_text_field":
+    case "rich_text_field":
+    case "product_reference":
+    case "variant_reference":
+    case "collection_reference":
+    case "page_reference":
+    case "order_reference":
+    case "customer_reference":
+    case "company_reference":
+    case "blog_reference":
+    case "metaobject_reference":
+    case "file_reference":
     default:
       return trimmedValue;
   }
@@ -269,7 +288,6 @@ export default function AddMetafield() {
   const [sortSelected, setSortSelected] = useState(["title-asc"]);
   const [taggedWith, setTaggedWith] = useState("");
 
-  // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedResources, setSelectedResources] = useState([]);
 
@@ -400,13 +418,11 @@ export default function AddMetafield() {
     sortSelected,
   ]);
 
-  // Pagination calculations
   const totalPages = Math.ceil(filteredAndSortedRows.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const paginatedRows = filteredAndSortedRows.slice(startIndex, endIndex);
 
-  // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [
@@ -421,14 +437,12 @@ export default function AddMetafield() {
   const handleSelectionChange = useCallback(
     (selectionType, toggleType, selection) => {
       if (selectionType === "all") {
-        // Select ALL products across all pages
         setSelectedResources(
           selectedResources.length === filteredAndSortedRows.length
             ? []
             : filteredAndSortedRows.map((r) => r.id),
         );
       } else if (selectionType === "page") {
-        // Select all on current page
         const pageIds = paginatedRows.map((r) => r.id);
         if (toggleType) {
           const newSelections = [...selectedResources];
@@ -455,7 +469,6 @@ export default function AddMetafield() {
     [filteredAndSortedRows, paginatedRows, selectedResources],
   );
 
-  // Select all products (across all pages)
   const handleSelectAllProducts = useCallback(() => {
     setSelectedResources(filteredAndSortedRows.map((r) => r.id));
   }, [filteredAndSortedRows]);
@@ -738,9 +751,13 @@ export default function AddMetafield() {
       <Page title="Add Metafield" fullWidth>
         <div style={{ marginBottom: "18px" }}>
           <Card padding="0">
-            {/* Select All Button */}
-            <div style={{ padding: "12px", borderBottom: "1px solid #E1E3E5" }}>
-              <InlineStack gap="200" align="end" blockAlign="center">
+            <div style={{ padding: "16px", borderBottom: "1px solid #E1E3E5" }}>
+              <InlineStack gap="200" align="space-between" blockAlign="center">
+                <Text variant="bodySm" tone="subdued">
+                  {filteredAndSortedRows.length > ITEMS_PER_PAGE
+                    ? `Showing ${startIndex + 1}-${Math.min(endIndex, filteredAndSortedRows.length)} of ${filteredAndSortedRows.length} products`
+                    : `${filteredAndSortedRows.length} product${filteredAndSortedRows.length !== 1 ? "s" : ""}`}
+                </Text>
                 {selectedResources.length < filteredAndSortedRows.length && (
                   <Button
                     size="slim"
@@ -763,6 +780,7 @@ export default function AddMetafield() {
                   )}
               </InlineStack>
             </div>
+
             <IndexFilters
               sortOptions={[
                 { label: "Title", value: "title-asc", directionLabel: "A-Z" },
@@ -830,7 +848,6 @@ export default function AddMetafield() {
               {rowMarkup}
             </IndexTable>
 
-            {/* Pagination */}
             {totalPages > 1 && (
               <div
                 style={{
@@ -851,6 +868,7 @@ export default function AddMetafield() {
             )}
           </Card>
         </div>
+
         <AddMetafieldModal
           selectedResources={selectedResources}
           active={metafieldModalActive}
@@ -888,6 +906,7 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 }
 
+// ✅ DYNAMIC METAFIELD MODAL
 function AddMetafieldModal({
   selectedResources = [],
   active,
@@ -997,6 +1016,318 @@ function AddMetafieldModal({
     setErrors({});
   }, [selectedMetafieldKey]);
 
+  // ✅ DYNAMIC INPUT RENDERING
+  const renderInputField = () => {
+    if (!selectedMetafield) return null;
+
+    const type = selectedMetafield.type;
+    const commonProps = {
+      value: value,
+      onChange: setValue,
+      disabled: isProcessing,
+      error: errors.value,
+      autoComplete: "off",
+    };
+
+    switch (type) {
+      case "single_line_text_field":
+        return (
+          <TextField
+            label="Metafield Value"
+            {...commonProps}
+            placeholder="Enter text..."
+            helpText="Single line text field"
+          />
+        );
+
+      case "multi_line_text_field":
+        return (
+          <TextField
+            label="Metafield Value"
+            {...commonProps}
+            placeholder="Enter multiple lines of text..."
+            helpText="Multi-line text field"
+            multiline={4}
+          />
+        );
+
+      case "rich_text_field":
+        return (
+          <TextField
+            label="Metafield Value (HTML)"
+            {...commonProps}
+            placeholder="<p>Enter HTML content...</p>"
+            helpText="Rich text field - HTML format"
+            multiline={4}
+          />
+        );
+
+      case "number_integer":
+        return (
+          <TextField
+            label="Integer Value"
+            {...commonProps}
+            type="number"
+            placeholder="42"
+            helpText="Enter a whole number (e.g., 42)"
+          />
+        );
+
+      case "number_decimal":
+        return (
+          <TextField
+            label="Decimal Value"
+            {...commonProps}
+            type="number"
+            step="0.01"
+            placeholder="3.14"
+            helpText="Enter a decimal number (e.g., 3.14)"
+          />
+        );
+
+      case "money":
+        return (
+          <TextField
+            label="Money Amount"
+            {...commonProps}
+            type="number"
+            step="0.01"
+            placeholder="99.99"
+            helpText="Enter money amount (e.g., 99.99)"
+            prefix="$"
+          />
+        );
+
+      case "rating":
+        return (
+          <TextField
+            label="Rating"
+            {...commonProps}
+            type="number"
+            step="0.1"
+            min="1"
+            max="5"
+            placeholder="4.5"
+            helpText="Enter a rating from 1 to 5 (e.g., 4.5)"
+          />
+        );
+
+      case "weight":
+        return (
+          <TextField
+            label="Weight"
+            {...commonProps}
+            type="number"
+            step="0.01"
+            placeholder="2.5"
+            helpText="Enter weight value (e.g., 2.5 kg)"
+            suffix="kg"
+          />
+        );
+
+      case "volume":
+        return (
+          <TextField
+            label="Volume"
+            {...commonProps}
+            type="number"
+            step="0.01"
+            placeholder="500"
+            helpText="Enter volume value (e.g., 500 ml)"
+            suffix="ml"
+          />
+        );
+
+      case "dimension":
+        return (
+          <TextField
+            label="Dimension"
+            {...commonProps}
+            type="number"
+            step="0.01"
+            placeholder="10.5"
+            helpText="Enter dimension value (e.g., 10.5 cm)"
+            suffix="cm"
+          />
+        );
+
+      case "date":
+        return (
+          <TextField
+            label="Date"
+            {...commonProps}
+            type="date"
+            placeholder="2026-02-16"
+            helpText="Select or enter date in format: YYYY-MM-DD"
+          />
+        );
+
+      case "date_time":
+        return (
+          <TextField
+            label="Date & Time"
+            {...commonProps}
+            type="datetime-local"
+            placeholder="2026-02-16T12:00"
+            helpText="Select or enter date and time"
+          />
+        );
+
+      case "boolean":
+        return (
+          <Select
+            label="Boolean Value"
+            options={[
+              { label: "Select value", value: "", disabled: true },
+              { label: "True", value: "true" },
+              { label: "False", value: "false" },
+            ]}
+            value={value}
+            onChange={setValue}
+            disabled={isProcessing}
+            error={errors.value}
+            helpText="Select true or false"
+          />
+        );
+
+      case "color":
+        return (
+          <BlockStack gap="200">
+            <TextField
+              label="Color (Hex)"
+              {...commonProps}
+              placeholder="FF5733"
+              helpText="Enter hex color code without # (e.g., FF5733)"
+            />
+            {value && /^#?[0-9A-Fa-f]{6}$/.test(value) && (
+              <div
+                style={{
+                  width: "100%",
+                  height: "40px",
+                  backgroundColor: value.startsWith("#") ? value : `#${value}`,
+                  borderRadius: "8px",
+                  border: "1px solid #e1e3e5",
+                }}
+                title={`Color preview: ${value}`}
+              />
+            )}
+          </BlockStack>
+        );
+
+      case "url":
+        return (
+          <TextField
+            label="URL"
+            {...commonProps}
+            type="url"
+            placeholder="https://example.com"
+            helpText="Enter a full URL (e.g., https://example.com)"
+          />
+        );
+
+      case "json":
+        return (
+          <TextField
+            label="JSON Data"
+            {...commonProps}
+            placeholder='{"key": "value", "number": 123}'
+            helpText='Enter valid JSON (e.g., {"key": "value"})'
+            multiline={6}
+          />
+        );
+
+      case "product_reference":
+      case "variant_reference":
+      case "collection_reference":
+      case "page_reference":
+      case "order_reference":
+      case "customer_reference":
+      case "company_reference":
+      case "blog_reference":
+      case "metaobject_reference":
+        const referenceType = type.replace("_reference", "");
+        const capitalizedType =
+          referenceType.charAt(0).toUpperCase() + referenceType.slice(1);
+        return (
+          <TextField
+            label={`${capitalizedType} Reference`}
+            {...commonProps}
+            placeholder={`gid://shopify/${capitalizedType}/123456789`}
+            helpText={`Enter ${referenceType} GID (e.g., gid://shopify/${capitalizedType}/123456789)`}
+          />
+        );
+
+      case "file_reference":
+        return (
+          <BlockStack gap="300">
+            <TextField
+              label="File Reference (GID)"
+              {...commonProps}
+              placeholder="gid://shopify/MediaImage/123456789"
+              helpText="Enter the Shopify file GID. You can find this in your Shopify admin under Settings → Files."
+            />
+
+            {/* Show validation status */}
+            {value && value.startsWith("gid://shopify/") && (
+              <div
+                style={{
+                  padding: "12px",
+                  backgroundColor: "#f0fdf4",
+                  borderRadius: "8px",
+                  border: "1px solid #86efac",
+                }}
+              >
+                <Text variant="bodySm" tone="success">
+                  ✓ Valid Shopify file GID
+                </Text>
+              </div>
+            )}
+
+            {value && !value.startsWith("gid://shopify/") && (
+              <div
+                style={{
+                  padding: "12px",
+                  backgroundColor: "#fff4e6",
+                  borderRadius: "8px",
+                  border: "1px solid #fbbf24",
+                }}
+              >
+                <Text variant="bodySm" tone="warning">
+                  ⚠ GID must start with "gid://shopify/"
+                </Text>
+              </div>
+            )}
+
+            {/* Instructions */}
+            <Banner tone="info">
+              <Text variant="bodySm" as="p">
+                <strong>How to get a file GID:</strong>
+              </Text>
+              <Text variant="bodySm" as="p">
+                1. Go to Shopify Admin → Settings → Files
+              </Text>
+              <Text variant="bodySm" as="p">
+                2. Upload or select your file
+              </Text>
+              <Text variant="bodySm" as="p">
+                3. Copy the file GID (starts with gid://shopify/)
+              </Text>
+            </Banner>
+          </BlockStack>
+        );
+
+      default:
+        return (
+          <TextField
+            label="Metafield Value"
+            {...commonProps}
+            placeholder="Enter value..."
+            helpText={getValueHelpText(type)}
+          />
+        );
+    }
+  };
+
   return (
     <Modal
       open={active}
@@ -1046,23 +1377,7 @@ function AddMetafieldModal({
             helpText="Select from your store's metafield definitions"
           />
 
-          {selectedMetafield && (
-            <TextField
-              label="Metafield Value"
-              value={value}
-              onChange={setValue}
-              disabled={isProcessing}
-              placeholder={getValuePlaceholder(selectedMetafield.type)}
-              helpText={getValueHelpText(selectedMetafield.type)}
-              error={errors.value}
-              multiline={
-                selectedMetafield.type === "multi_line_text_field" ||
-                selectedMetafield.type === "json"
-              }
-              rows={selectedMetafield.type === "json" ? 5 : 3}
-              autoComplete="off"
-            />
-          )}
+          {renderInputField()}
 
           {isProcessing && (
             <BlockStack gap="200">
@@ -1087,27 +1402,11 @@ function getValueHelpText(type) {
     date_time: "Format: YYYY-MM-DDTHH:MM:SS (e.g., 2026-02-09T12:00:00)",
     url: "Enter a full URL (e.g., https://example.com)",
     json: 'Enter valid JSON (e.g., {"key": "value"})',
-    color: "Enter hex color (e.g., #FF5733)",
+    color: "Enter hex color (e.g., FF5733)",
     boolean: "Enter true or false",
     rating: "Enter a number from 1 to 5",
   };
   return helpTexts[type] || "Enter the metafield value";
-}
-
-function getValuePlaceholder(type) {
-  const placeholders = {
-    number_integer: "42",
-    number_decimal: "3.14",
-    date: "2026-02-09",
-    date_time: "2026-02-09T12:00:00",
-    url: "https://example.com",
-    json: '{"key": "value"}',
-    color: "#FF5733",
-    boolean: "true",
-    rating: "4",
-    multi_line_text_field: "Enter multiple lines of text...",
-  };
-  return placeholders[type] || "Enter value...";
 }
 
 function validateMetafieldValue(value, type) {
@@ -1123,7 +1422,7 @@ function validateMetafieldValue(value, type) {
     date: (v) =>
       !/^\d{4}-\d{2}-\d{2}$/.test(v) ? "Must be in format YYYY-MM-DD" : null,
     date_time: (v) =>
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)
         ? "Must be in format YYYY-MM-DDTHH:MM:SS"
         : null,
     url: (v) => {
@@ -1143,8 +1442,8 @@ function validateMetafieldValue(value, type) {
       }
     },
     color: (v) =>
-      !/^#[0-9A-Fa-f]{6}$/.test(v)
-        ? "Must be a valid hex color (e.g., #FF5733)"
+      !/^#?[0-9A-Fa-f]{6}$/.test(v)
+        ? "Must be a valid hex color (e.g., FF5733)"
         : null,
     boolean: (v) =>
       v.toLowerCase() !== "true" && v.toLowerCase() !== "false"
@@ -1156,6 +1455,28 @@ function validateMetafieldValue(value, type) {
         ? "Must be a number from 1 to 5"
         : null;
     },
+    file_reference: (v) =>
+      !v.startsWith("gid://shopify/")
+        ? "Must be a valid Shopify GID (e.g., gid://shopify/MediaImage/123456789)"
+        : null,
+    product_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    variant_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    collection_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    page_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    order_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    customer_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    company_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    blog_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
+    metaobject_reference: (v) =>
+      !v.startsWith("gid://shopify/") ? "Must be a valid Shopify GID" : null,
   };
 
   return validators[type] ? validators[type](value) : null;

@@ -1,4 +1,4 @@
-import { Combobox, Icon, Listbox, Select } from "@shopify/polaris";
+import { Combobox, Icon, Listbox } from "@shopify/polaris";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BlogIcon,
@@ -22,6 +22,7 @@ import {
 
 export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
   const [inputValue, setInputValue] = useState("");
+  const [active, setActive] = useState(false);
 
   const TYPE_ICON_MAP = {
     single_line_text_field: TextIcon,
@@ -56,9 +57,26 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
     file_reference: FileIcon,
   };
 
-  const updateText = useCallback((value) => {
-    setInputValue(value);
-  }, []);
+  // Sync input text when value changes externally
+  useEffect(() => {
+    const selectedOption = TYPE_OPTIONS.flatMap((group) => group.options).find(
+      (option) => option.value === value,
+    );
+
+    if (selectedOption) {
+      setInputValue(selectedOption.label);
+    }
+  }, [value, TYPE_OPTIONS]);
+
+  const updateText = useCallback(
+    (value) => {
+      setInputValue(value);
+      if (!active) {
+        setActive(true);
+      }
+    },
+    [active],
+  );
 
   const updateSelection = useCallback(
     (selected) => {
@@ -69,10 +87,19 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
       if (selectedOption) {
         setInputValue(selectedOption.label);
         onChange?.(selected);
+        setActive(false);
       }
     },
     [TYPE_OPTIONS, onChange],
   );
+
+  // ✅ FIX: Handle blur with delay to allow clicks
+  const handleBlur = useCallback(() => {
+    // Small delay to allow option click to register
+    setTimeout(() => {
+      setActive(false);
+    }, 200);
+  }, []);
 
   const filteredOptions = useMemo(() => {
     if (!inputValue) return TYPE_OPTIONS;
@@ -89,7 +116,7 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
     <Listbox.Section key={group.title}>
       <div
         style={{
-          padding: "8px 16px 2px 16px",
+          padding: "8px 16px 2px",
           fontSize: "13px",
           fontWeight: "600",
           color: "#6D7175",
@@ -106,7 +133,6 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
             key={option.value}
             value={option.value}
             selected={value === option.value}
-            accessibilityLabel={option.label}
           >
             <div
               style={{
@@ -127,6 +153,7 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
 
   return (
     <Combobox
+      active={active}
       activator={
         <Combobox.TextField
           label="Metafield type"
@@ -135,21 +162,32 @@ export function FieldTypeSelect({ TYPE_OPTIONS = [], value, onChange }) {
           prefix={<Icon source={SearchIcon} />}
           placeholder="Search type"
           autoComplete="off"
+          onFocus={() => setActive(true)}
+          onBlur={handleBlur}
         />
       }
     >
       {filteredOptions.length > 0 ? (
         <Listbox onSelect={updateSelection}>
-          <div style={{ maxHeight: "280px", overflowY: "auto" }}>
+          <div
+            style={{
+              maxHeight: "280px",
+              overflowY: "auto",
+              // ✅ FIX: Prevent scroll from closing dropdown
+              overscrollBehavior: "contain",
+            }}
+            onMouseDown={(e) => {
+              // ✅ FIX: Prevent blur when clicking inside dropdown
+              e.preventDefault();
+            }}
+          >
             {optionsMarkup}
           </div>
         </Listbox>
       ) : (
         <Listbox>
           <Listbox.Option value="" disabled>
-            <s-text as="span" tone="subdued">
-              No results found
-            </s-text>
+            <span style={{ color: "#6D7175" }}>No results found</span>
           </Listbox.Option>
         </Listbox>
       )}
