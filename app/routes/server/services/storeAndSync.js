@@ -72,6 +72,8 @@ export const storeAndSyncData = async (
           update: {
             $set: {
               shop,
+              vendor: v.vendor ?? null,
+              status: v.status ?? null,
               variantId: v.id,
               productId: v.productId ?? null,
               variantTitle: v.title ?? null,
@@ -79,6 +81,14 @@ export const storeAndSyncData = async (
               productType: v.productType ?? null,
               tags: Array.isArray(v.tags) ? v.tags : [],
               price: v.price !== undefined ? Number(v.price) : null,
+              category: v.category ?? null,
+              collections: Array.isArray(v.collections)
+                ? v.collections.map((c) => ({
+                    id: c.id ?? null,
+                    title: c.title ?? null,
+                    handle: c.handle ?? null,
+                  }))
+                : [],
               compareAtPrice:
                 v.compareAtPrice !== undefined
                   ? Number(v.compareAtPrice)

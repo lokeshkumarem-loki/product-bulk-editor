@@ -18,6 +18,11 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 
 const ITEMS_PER_PAGE = 50;
 
+function capitalize(str) {
+  if (!str) return "Unknown";
+  return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+}
+
 export function VariantsTable({
   variantsData = [],
   handleSubmit,
@@ -34,11 +39,18 @@ export function VariantsTable({
     });
   }, [variantsData, actionType]);
 
+  console.log(validVariants);
+
   // Filter and sort states
   const [queryValue, setQueryValue] = useState("");
   const [productTypeFilter, setProductTypeFilter] = useState([]);
   const [tagFilter, setTagFilter] = useState([]);
   const [sortSelected, setSortSelected] = useState(["productTitle-asc"]);
+  // ✅ Fixed: each filter has its own state
+  const [statusFilter, setStatusFilter] = useState([]);
+  const [vendorFilter, setVendorFilter] = useState([]);
+  const [categoryFilter, setCategoryFilter] = useState([]);
+  const [collectionFilter, setCollectionFilter] = useState([]);
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -63,11 +75,37 @@ export function VariantsTable({
     ].sort();
 
     const allTags = validVariants.flatMap((v) => v.tags || []);
+    const allVendors = validVariants.map((v) => v.vendor);
+    const allCategory = validVariants.map((v) => v.category);
     const uniqueTags = [...new Set(allTags)].filter(Boolean).sort();
+    const uniqueVendor = [...new Set(allVendors)].filter(Boolean).sort();
+    const uniqueCategory = [...new Set(allCategory)].filter(Boolean).sort();
+
+    // ✅ Fixed: use collections array properly
+    const allCols = validVariants.flatMap((r) =>
+      Array.isArray(r.collections) ? r.collections : [],
+    );
+    const collections = [
+      ...new Map(allCols.map((c) => [c.id || c.title, c])).values(),
+    ].filter((c) => c.title && c.title !== "—");
+
+    const statuses = [...new Set(validVariants.map((r) => r.status))].filter(
+      (s) => s && s !== "—",
+    );
 
     return {
+      statuses: statuses.map((s) => ({ label: capitalize(s), value: s })),
       productTypes: types.map((type) => ({ label: type, value: type })),
       tags: uniqueTags.map((tag) => ({ label: tag, value: tag })),
+      vendors: uniqueVendor.map((vendor) => ({ label: vendor, value: vendor })),
+      category: uniqueCategory.map((category) => ({
+        label: category,
+        value: category,
+      })),
+      collections: collections.map((c) => ({
+        label: c.title,
+        value: c.id || c.title,
+      })),
     };
   }, [validVariants]);
 
@@ -100,6 +138,34 @@ export function VariantsTable({
       );
     }
 
+    // ✅ Fixed: Status filter using statusFilter state
+    if (statusFilter.length > 0) {
+      filtered = filtered.filter((v) => statusFilter.includes(v.status));
+    }
+
+    // ✅ Fixed: Vendor filter using vendorFilter state
+    if (vendorFilter.length > 0) {
+      filtered = filtered.filter((v) => vendorFilter.includes(v.vendor));
+    }
+
+    // ✅ Fixed: Category filter using categoryFilter state
+    if (categoryFilter.length > 0) {
+      filtered = filtered.filter((v) => categoryFilter.includes(v.category));
+    }
+
+    // ✅ Fixed: Collection filter using collections array properly
+    if (collectionFilter.length > 0) {
+      filtered = filtered.filter(
+        (v) =>
+          Array.isArray(v.collections) &&
+          v.collections.some(
+            (c) =>
+              collectionFilter.includes(c.id) ||
+              collectionFilter.includes(c.title),
+          ),
+      );
+    }
+
     // Sorting
     if (sortSelected.length > 0) {
       const [sortKey, direction] = sortSelected[0].split("-");
@@ -123,7 +189,17 @@ export function VariantsTable({
     }
 
     return filtered;
-  }, [validVariants, queryValue, productTypeFilter, tagFilter, sortSelected]);
+  }, [
+    validVariants,
+    queryValue,
+    productTypeFilter,
+    tagFilter,
+    statusFilter,
+    vendorFilter,
+    categoryFilter,
+    collectionFilter,
+    sortSelected,
+  ]);
 
   // Pagination calculations
   const totalPages = Math.ceil(
@@ -139,7 +215,16 @@ export function VariantsTable({
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [queryValue, productTypeFilter, tagFilter, sortSelected]);
+  }, [
+    queryValue,
+    productTypeFilter,
+    tagFilter,
+    statusFilter,
+    vendorFilter,
+    categoryFilter,
+    collectionFilter,
+    sortSelected,
+  ]);
 
   // Get selected variant IDs
   const selectedIds = useMemo(
@@ -160,14 +245,12 @@ export function VariantsTable({
       }));
 
       if (selectionType === "all") {
-        // Select ALL across all pages
         setSelectedResources(
           selectedResources.length === allFilteredData.length
             ? []
             : allFilteredData,
         );
       } else if (selectionType === "page") {
-        // Select all on current page only
         const pageData = paginatedVariants.map((v) => ({
           productId: v.productId,
           variantId: v.variantId,
@@ -178,7 +261,6 @@ export function VariantsTable({
         }));
 
         if (toggleType) {
-          // Add current page selections
           const newSelections = [...selectedResources];
           pageData.forEach((item) => {
             if (!selectedIds.includes(item.variantId)) {
@@ -187,7 +269,6 @@ export function VariantsTable({
           });
           setSelectedResources(newSelections);
         } else {
-          // Remove current page selections
           const pageIds = pageData.map((d) => d.variantId);
           setSelectedResources(
             selectedResources.filter(
@@ -234,14 +315,18 @@ export function VariantsTable({
     setSelectedResources(allVariantData);
   }, [filteredAndSortedVariants]);
 
-  // Clear all filters
+  // ✅ Fixed: Clear all filters including new ones
   const handleClearAll = useCallback(() => {
     setQueryValue("");
     setProductTypeFilter([]);
     setTagFilter([]);
+    setStatusFilter([]);
+    setVendorFilter([]);
+    setCategoryFilter([]);
+    setCollectionFilter([]);
   }, []);
 
-  // Applied filters
+  // ✅ Fixed: Applied filters for all filter types
   const appliedFilters = [];
   if (productTypeFilter.length > 0) {
     appliedFilters.push({
@@ -257,8 +342,36 @@ export function VariantsTable({
       onRemove: () => setTagFilter([]),
     });
   }
+  if (statusFilter.length > 0) {
+    appliedFilters.push({
+      key: "status",
+      label: disambiguateLabel("Status", statusFilter),
+      onRemove: () => setStatusFilter([]),
+    });
+  }
+  if (vendorFilter.length > 0) {
+    appliedFilters.push({
+      key: "vendor",
+      label: disambiguateLabel("Vendor", vendorFilter),
+      onRemove: () => setVendorFilter([]),
+    });
+  }
+  if (categoryFilter.length > 0) {
+    appliedFilters.push({
+      key: "category",
+      label: disambiguateLabel("Category", categoryFilter),
+      onRemove: () => setCategoryFilter([]),
+    });
+  }
+  if (collectionFilter.length > 0) {
+    appliedFilters.push({
+      key: "collection",
+      label: disambiguateLabel("Collection", collectionFilter),
+      onRemove: () => setCollectionFilter([]),
+    });
+  }
 
-  // Filter configuration
+  // ✅ Fixed: All filters use their own state
   const filters = [
     {
       key: "productType",
@@ -286,6 +399,65 @@ export function VariantsTable({
           choices={filterOptions.tags}
           selected={tagFilter}
           onChange={setTagFilter}
+          allowMultiple
+        />
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      shortcut: true,
+      filter: (
+        <ChoiceList
+          title="Status"
+          titleHidden
+          choices={filterOptions.statuses}
+          selected={statusFilter}
+          onChange={setStatusFilter}
+          allowMultiple
+        />
+      ),
+    },
+    {
+      key: "vendor",
+      label: "Vendor",
+      shortcut: true,
+      filter: (
+        <ChoiceList
+          title="Vendor"
+          titleHidden
+          choices={filterOptions.vendors}
+          selected={vendorFilter}
+          onChange={setVendorFilter}
+          allowMultiple
+        />
+      ),
+    },
+    {
+      key: "collection",
+      label: "Collection",
+      shortcut: true,
+      filter: (
+        <ChoiceList
+          title="Collection"
+          titleHidden
+          choices={filterOptions.collections}
+          selected={collectionFilter}
+          onChange={setCollectionFilter}
+          allowMultiple
+        />
+      ),
+    },
+    {
+      key: "category",
+      label: "Category",
+      filter: (
+        <ChoiceList
+          title="Category"
+          titleHidden
+          choices={filterOptions.category}
+          selected={categoryFilter}
+          onChange={setCategoryFilter}
           allowMultiple
         />
       ),
@@ -566,36 +738,12 @@ export function VariantsTable({
 }
 
 const sortOptions = [
-  {
-    label: "Product",
-    value: "productTitle-asc",
-    directionLabel: "A-Z",
-  },
-  {
-    label: "Product",
-    value: "productTitle-desc",
-    directionLabel: "Z-A",
-  },
-  {
-    label: "Type",
-    value: "productType-asc",
-    directionLabel: "A-Z",
-  },
-  {
-    label: "Type",
-    value: "productType-desc",
-    directionLabel: "Z-A",
-  },
-  {
-    label: "Price",
-    value: "price-asc",
-    directionLabel: "Low to High",
-  },
-  {
-    label: "Price",
-    value: "price-desc",
-    directionLabel: "High to Low",
-  },
+  { label: "Product", value: "productTitle-asc", directionLabel: "A-Z" },
+  { label: "Product", value: "productTitle-desc", directionLabel: "Z-A" },
+  { label: "Type", value: "productType-asc", directionLabel: "A-Z" },
+  { label: "Type", value: "productType-desc", directionLabel: "Z-A" },
+  { label: "Price", value: "price-asc", directionLabel: "Low to High" },
+  { label: "Price", value: "price-desc", directionLabel: "High to Low" },
   {
     label: "Compare Price",
     value: "compareAtPrice-asc",

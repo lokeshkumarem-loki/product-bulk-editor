@@ -211,9 +211,9 @@ export default function ProductTag() {
   const [queryValue, setQueryValue] = useState("");
   const [statusFilter, setStatusFilter] = useState([]);
   const [vendorFilter, setVendorFilter] = useState([]);
-  const [typeFilter, setTypeFilter] = useState([]);
   const [categoryFilter, setCategoryFilter] = useState([]);
   const [collectionFilter, setCollectionFilter] = useState([]);
+  const [typeFilter, setTypeFilter] = useState([]);
   const [tagFilter, setTagFilter] = useState([]);
   const [sortSelected, setSortSelected] = useState(["title-asc"]);
   const [taggedWith, setTaggedWith] = useState("");

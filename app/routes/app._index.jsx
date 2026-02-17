@@ -158,6 +158,7 @@ export async function loader({ request }) {
         const allVariants = [];
         products.forEach((product) => {
           const productVariants = variantMap.get(product.id) || [];
+          const productCollections = collectionMap.get(product.id) || [];
           productVariants.forEach((v) => {
             allVariants.push({
               id: v.id,
@@ -169,6 +170,14 @@ export async function loader({ request }) {
               price: v.price ?? null,
               compareAtPrice: v.compareAtPrice ?? null,
               image: v.image ?? null,
+              vendor: product.vendor ?? null,
+              status: product.status ?? null,
+              category: product.category?.name ?? null,
+              collections: productCollections.map((c) => ({
+                id: c.id ?? null,
+                title: c.title ?? null,
+                handle: c.handle ?? null,
+              })),
             });
           });
         });
