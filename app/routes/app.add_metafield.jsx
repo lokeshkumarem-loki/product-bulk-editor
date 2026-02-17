@@ -751,13 +751,8 @@ export default function AddMetafield() {
       <Page title="Add Metafield" fullWidth>
         <div style={{ marginBottom: "18px" }}>
           <Card padding="0">
-            <div style={{ padding: "16px", borderBottom: "1px solid #E1E3E5" }}>
-              <InlineStack gap="200" align="space-between" blockAlign="center">
-                <Text variant="bodySm" tone="subdued">
-                  {filteredAndSortedRows.length > ITEMS_PER_PAGE
-                    ? `Showing ${startIndex + 1}-${Math.min(endIndex, filteredAndSortedRows.length)} of ${filteredAndSortedRows.length} products`
-                    : `${filteredAndSortedRows.length} product${filteredAndSortedRows.length !== 1 ? "s" : ""}`}
-                </Text>
+            <div style={{ padding: "12px", borderBottom: "1px solid #E1E3E5" }}>
+              <InlineStack gap="200" align="end" blockAlign="center">
                 {selectedResources.length < filteredAndSortedRows.length && (
                   <Button
                     size="slim"
