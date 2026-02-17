@@ -7,6 +7,8 @@ import {
   TextField,
   InlineStack,
   Spinner,
+  ButtonGroup,
+  Button as PolarisButton,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { StoreCollection, VariantCollection } from "./server/db/model";
@@ -29,33 +31,31 @@ export async function action({ request }) {
     const formData = await request.formData();
     const variantData = JSON.parse(formData.get("variants") || "[]");
     const discountPrice = Number(formData.get("discountPrice") || 0);
+    const mode = formData.get("mode") || "fixed";
+    const percentage = Number(formData.get("percentage") || 0);
 
     if (!variantData.length) {
-      return {
-        success: false,
-        error: "No variants provided",
-      };
+      return { success: false, error: "No variants provided" };
     }
 
-    if (!discountPrice || discountPrice <= 0) {
-      return {
-        success: false,
-        error: "Please enter a valid discount price greater than 0",
-      };
-    }
-
-    // Group variants by product (same structure as Remove Discount)
+    // Group variants by product
     const variantsByProduct = variantData.reduce((acc, item) => {
       const productId = item.productId;
-      if (!acc[productId]) {
-        acc[productId] = [];
-      }
-      // Push the variant structure
+      if (!acc[productId]) acc[productId] = [];
+
+      // ✅ For percentage mode, each variant already has its own discountPrice
+      const finalDiscountPrice =
+        mode === "percentage"
+          ? parseFloat(
+              (item.price - (item.price * percentage) / 100).toFixed(2),
+            )
+          : discountPrice;
+
       acc[productId].push({
         id: item.id || item.variantId,
         variantId: item.variantId,
         price: item.price,
-        discountPrice: discountPrice, // Store the discount price
+        discountPrice: finalDiscountPrice,
       });
       return acc;
     }, {});
@@ -67,11 +67,11 @@ export async function action({ request }) {
     for (const [productId, variants] of Object.entries(variantsByProduct)) {
       try {
         const invalidVariants = variants.filter(
-          (v) => v.discountPrice >= v.price,
+          (v) => v.discountPrice >= v.price || v.discountPrice <= 0,
         );
         if (invalidVariants.length > 0) {
           throw new Error(
-            `Discount price (${discountPrice}) must be less than original price for all variants`,
+            `Computed discount price must be greater than 0 and less than original price`,
           );
         }
 
@@ -79,23 +79,14 @@ export async function action({ request }) {
           `#graphql
           mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
             productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-              product {
-                id
-              }
-              productVariants {
-                id
-                price
-                compareAtPrice
-              }
-              userErrors {
-                field
-                message
-              }
+              product { id }
+              productVariants { id price compareAtPrice }
+              userErrors { field message }
             }
           }`,
           {
             variables: {
-              productId: productId,
+              productId,
               variants: variants.map((v) => ({
                 id: v.id,
                 price: String(v.discountPrice),
@@ -114,12 +105,13 @@ export async function action({ request }) {
             totalErrors++;
           });
         } else {
-          const updatedCount = data?.productVariants?.length || 0;
-          totalUpdated += updatedCount;
-
-          // Update local DB for this product's variants
-          const variantIds = variants.map((v) => v.id);
-          await updateLocalDB(shop, productId, variantIds, variants);
+          totalUpdated += data?.productVariants?.length || 0;
+          await updateLocalDB(
+            shop,
+            productId,
+            variants.map((v) => v.id),
+            variants,
+          );
         }
       } catch (error) {
         errors.push(`Product ${productId}: ${error.message}`);
@@ -142,24 +134,16 @@ export async function action({ request }) {
       count: totalUpdated,
     };
   } catch (error) {
-    return {
-      success: false,
-      error: error.message || "Something went wrong",
-    };
+    return { success: false, error: error.message || "Something went wrong" };
   }
 }
 
 async function updateLocalDB(shop, productId, variantIds, variants) {
   try {
     const VariantCol = await VariantCollection();
-
-    const updatePromises = variants.map((variant) => {
-      return VariantCol.updateOne(
-        {
-          shop,
-          productId,
-          variantId: variant.variantId,
-        },
+    const updatePromises = variants.map((variant) =>
+      VariantCol.updateOne(
+        { shop, productId, variantId: variant.variantId },
         {
           $set: {
             price: Number(variant.discountPrice) || 0,
@@ -167,11 +151,10 @@ async function updateLocalDB(shop, productId, variantIds, variants) {
             syncedAt: new Date().toLocaleString(),
           },
         },
-      );
-    });
+      ),
+    );
     const results = await Promise.all(updatePromises);
-    const modified = results.reduce((sum, r) => sum + r.modifiedCount, 0);
-    return { modified };
+    return { modified: results.reduce((sum, r) => sum + r.modifiedCount, 0) };
   } catch (error) {
     console.error("❌ Failed to update local DB:", error);
     throw error;
@@ -187,18 +170,15 @@ export async function loader({ request }) {
     const variants = await variantCol.find({ shop }).toArray();
 
     const variantsData = variants
-      .filter((v) => {
-        const compareAt = Number(v.compareAtPrice) || 0;
-        return compareAt === 0;
-      })
+      .filter((v) => (Number(v.compareAtPrice) || 0) === 0)
       .map((v) => ({
         id: v.variantId,
         variantId: v.variantId,
         productId: v.productId,
-        vendor: v.vendor,
-        category: v.category,
-        collection: v.collections,
-        status: v.status,
+        vendor: v.vendor || "—",
+        category: v.category || "—",
+        collections: Array.isArray(v.collections) ? v.collections : [],
+        status: v.status || "—",
         productTitle: v.productTitle || "Untitled Product",
         variantTitle: v.variantTitle || "Default",
         productType: v.productType || "—",
@@ -216,10 +196,7 @@ export async function loader({ request }) {
     return {
       variantsData,
       storeCurrencyCode,
-      stats: {
-        total: variants.length,
-        withoutDiscount: variantsData.length,
-      },
+      stats: { total: variants.length, withoutDiscount: variantsData.length },
     };
   } catch (error) {
     return {
@@ -230,6 +207,23 @@ export async function loader({ request }) {
     };
   }
 }
+
+const currencyCodeToIcon = (code) => {
+  const moneyMap = {
+    USD: "$",
+    EUR: "€",
+    GBP: "£",
+    JPY: "¥",
+    INR: "₹",
+    AUD: "A$",
+    CAD: "C$",
+    CHF: "Fr",
+    CNY: "¥",
+    SEK: "kr",
+    NZD: "NZ$",
+  };
+  return moneyMap[code] || code;
+};
 
 export default function AddDiscountPricePage() {
   const { variantsData, stats, error, storeCurrencyCode } = useLoaderData();
@@ -257,12 +251,9 @@ export default function AddDiscountPricePage() {
         setDiscountPrice("");
         setSelectedProducts([]);
         setShouldClearSelection(true);
-
         setTimeout(() => {
           revalidator.revalidate();
-          setTimeout(() => {
-            setShouldClearSelection(false);
-          }, 100);
+          setTimeout(() => setShouldClearSelection(false), 100);
         }, 1500);
       } else {
         setToastMessage(actionData.error || "An error occurred");
@@ -283,39 +274,69 @@ export default function AddDiscountPricePage() {
     setModalActive(true);
   }, []);
 
-  const handleSubmitDiscount = useCallback(() => {
-    const price = Number(discountPrice);
+  const handleSubmitDiscount = useCallback(
+    (finalPrice, percentage, mode) => {
+      if (mode === "percentage") {
+        // Compute per-variant discounted price
+        const variants = selectedProducts.map((p) => {
+          const discounted = parseFloat(
+            (p.price - (p.price * percentage) / 100).toFixed(2),
+          );
+          return {
+            productId: p.productId,
+            id: p.id || p.variantId,
+            variantId: p.variantId,
+            price: p.price,
+            discountPrice: discounted,
+          };
+        });
 
-    if (!price || price <= 0) {
-      setToastMessage("Please enter a valid discount price greater than 0");
-      setToastError(true);
-      setToastActive(true);
-      return;
-    }
+        const formData = new FormData();
+        // For percentage mode we send variants with individual discountPrices
+        // We re-use discountPrice field as a flag and pass per-variant data
+        formData.append("discountPrice", String(variants[0].discountPrice));
+        formData.append("variants", JSON.stringify(variants));
+        // ✅ Send mode so action knows per-variant prices are pre-computed
+        formData.append("mode", "percentage");
+        formData.append("percentage", String(percentage));
+        submit(formData, { method: "post" });
+        return;
+      }
 
-    const invalidVariants = selectedProducts.filter((p) => price >= p.price);
-    if (invalidVariants.length > 0) {
-      setToastMessage(
-        `Discount price must be less than the original price for all variants`,
-      );
-      setToastError(true);
-      setToastActive(true);
-      return;
-    }
+      // Fixed price mode
+      const price = Number(finalPrice);
+      if (!price || price <= 0) {
+        setToastMessage("Please enter a valid discount price greater than 0");
+        setToastError(true);
+        setToastActive(true);
+        return;
+      }
 
-    const variants = selectedProducts.map((p) => ({
-      productId: p.productId,
-      id: p.id || p.variantId,
-      variantId: p.variantId,
-      price: p.price,
-    }));
+      const invalidVariants = selectedProducts.filter((p) => price >= p.price);
+      if (invalidVariants.length > 0) {
+        setToastMessage(
+          `Discount price must be less than the original price for all variants`,
+        );
+        setToastError(true);
+        setToastActive(true);
+        return;
+      }
 
-    const formData = new FormData();
-    formData.append("discountPrice", String(price));
-    formData.append("variants", JSON.stringify(variants));
+      const variants = selectedProducts.map((p) => ({
+        productId: p.productId,
+        id: p.id || p.variantId,
+        variantId: p.variantId,
+        price: p.price,
+      }));
 
-    submit(formData, { method: "post" });
-  }, [discountPrice, selectedProducts, submit]);
+      const formData = new FormData();
+      formData.append("discountPrice", String(price));
+      formData.append("variants", JSON.stringify(variants));
+      formData.append("mode", "fixed");
+      submit(formData, { method: "post" });
+    },
+    [selectedProducts, submit],
+  );
 
   const handleCloseModal = useCallback(() => {
     if (!isSubmitting) {
@@ -323,32 +344,6 @@ export default function AddDiscountPricePage() {
       setDiscountPrice("");
     }
   }, [isSubmitting]);
-
-  const toastMarkup = toastActive ? (
-    <Toast
-      content={toastMessage}
-      onDismiss={() => setToastActive(false)}
-      error={toastError}
-      duration={5000}
-    />
-  ) : null;
-
-  const currencyCodeToIcon = (code) => {
-    const moneyMap = {
-      USD: "$",
-      EUR: "€",
-      GBP: "£",
-      JPY: "¥",
-      INR: "₹",
-      AUD: "A$",
-      CAD: "C$",
-      CHF: "Fr",
-      CNY: "¥",
-      SEK: "kr",
-      NZD: "NZ$",
-    };
-    return moneyMap[code] || code;
-  };
 
   const storeCurrencySymbol = currencyCodeToIcon(storeCurrencyCode);
 
@@ -363,6 +358,12 @@ export default function AddDiscountPricePage() {
         }
         fullWidth
       >
+        {error && (
+          <Banner tone="critical" title="Error loading variants">
+            <p>{error}</p>
+          </Banner>
+        )}
+
         <div style={{ marginBottom: "12px" }}>
           <VariantsTable
             currencyCode={storeCurrencySymbol}
@@ -373,11 +374,9 @@ export default function AddDiscountPricePage() {
             actionType="add"
           />
         </div>
+
         <AddDiscountModal
           active={modalActive}
-          discountPrice={discountPrice}
-          setDiscountPrice={setDiscountPrice}
-          selectedCount={selectedProducts.length}
           handleClose={handleCloseModal}
           handleSubmit={handleSubmitDiscount}
           isProcessing={isSubmitting}
@@ -385,35 +384,116 @@ export default function AddDiscountPricePage() {
           selectedProducts={selectedProducts}
         />
 
-        {toastMarkup}
+        {toastActive && (
+          <Toast
+            content={toastMessage}
+            onDismiss={() => setToastActive(false)}
+            error={toastError}
+            duration={5000}
+          />
+        )}
       </Page>
     </Frame>
   );
 }
 
+// ─── Modal ────────────────────────────────────────────────────────────────────
+
 const AddDiscountModal = ({
   active,
-  discountPrice,
-  setDiscountPrice,
-  selectedCount,
   handleClose,
   handleSubmit,
   isProcessing,
   currencyCode,
   selectedProducts,
 }) => {
-  const previewVariant = selectedProducts[0];
-  const price = Number(discountPrice) || 0;
-  const originalPrice = previewVariant?.price || 0;
-  const discountAmount = originalPrice - price;
-  const discountPercentage =
-    originalPrice > 0 ? ((discountAmount / originalPrice) * 100).toFixed(1) : 0;
+  // "fixed" | "percentage"
+  const [discountMode, setDiscountMode] = useState("fixed");
+  const [inputValue, setInputValue] = useState("");
 
-  const isValid = price > 0 && price < originalPrice;
-
+  const selectedCount = selectedProducts.length;
   const prices = selectedProducts.map((p) => p.price);
-  const lowestPrice = Math.min(...prices);
-  const highestPrice = Math.max(...prices);
+  const lowestPrice = prices.length ? Math.min(...prices) : 0;
+  const highestPrice = prices.length ? Math.max(...prices) : 0;
+
+  // Computed final price shown in preview
+  const computedPrice = (() => {
+    const val = Number(inputValue);
+    if (!val || val <= 0) return 0;
+    if (discountMode === "fixed") return val;
+    // percentage: deduct % from lowestPrice for conservative preview
+    return parseFloat((lowestPrice - (lowestPrice * val) / 100).toFixed(2));
+  })();
+
+  // Validation
+  const inputError = (() => {
+    const val = Number(inputValue);
+    if (!inputValue || val <= 0) return undefined;
+
+    if (discountMode === "percentage") {
+      if (val <= 0 || val >= 100) return "Percentage must be between 1 and 99";
+      return undefined;
+    }
+
+    // fixed mode
+    if (val >= lowestPrice)
+      return `Must be less than ${currencyCode} ${lowestPrice.toFixed(2)} (lowest variant price)`;
+    return undefined;
+  })();
+
+  const isValid = (() => {
+    const val = Number(inputValue);
+    if (!val || val <= 0 || inputError) return false;
+    if (discountMode === "percentage") return val > 0 && val < 100;
+    return val > 0 && val < lowestPrice;
+  })();
+
+  // Reset on open/mode change
+  useEffect(() => {
+    setInputValue("");
+  }, [discountMode, active]);
+
+  const onSubmit = () => {
+    if (!isValid) return;
+    const val = Number(inputValue);
+
+    if (discountMode === "fixed") {
+      handleSubmit(String(val));
+    } else {
+      // For each selected product compute its own discounted price
+      // We pass the percentage; parent will compute per-variant prices
+      // But since action expects a single discountPrice, compute per variant
+      // and submit the lowest computed price as a sanity check —
+      // Actually: reuse handleSubmit but pass computed prices per variant.
+      // Since current action uses ONE discountPrice for ALL variants,
+      // we compute: originalPrice - (originalPrice * pct / 100) per variant
+      // and call submit individually. But to keep it simple with the current
+      // action structure, pass each variant its own discountPrice via
+      // a modified submit that sends per-variant prices.
+      handleSubmitPercentage(val);
+    }
+  };
+
+  const handleSubmitPercentage = (percentage) => {
+    // This calls the parent's submit with per-variant computed prices
+    // We'll pass the percentage and let parent compute — but current action
+    // only accepts single discountPrice. So we use the lowest computed price
+    // as the universal discount for safety, OR pass per-variant.
+    // Since parent handleSubmit only takes a price string, compute each:
+    handleSubmit(null, percentage, discountMode);
+  };
+
+  const previewVariant = selectedProducts[0];
+  const previewOriginal = previewVariant?.price || 0;
+  const previewNew =
+    discountMode === "fixed"
+      ? Number(inputValue) || 0
+      : previewOriginal - (previewOriginal * (Number(inputValue) || 0)) / 100;
+  const previewDiscount = previewOriginal - previewNew;
+  const previewPct =
+    previewOriginal > 0
+      ? ((previewDiscount / previewOriginal) * 100).toFixed(1)
+      : 0;
 
   return (
     <Modal
@@ -423,26 +503,26 @@ const AddDiscountModal = ({
       title="Add Discount Price"
       primaryAction={{
         content: isProcessing ? "Adding..." : "Add Discount",
-        onAction: handleSubmit,
-        disabled: !isValid || selectedCount === 0,
+        onAction: onSubmit,
+        disabled: !isValid || selectedCount === 0 || isProcessing,
         loading: isProcessing,
       }}
       secondaryActions={[
-        {
-          content: "Cancel",
-          onAction: handleClose,
-          disabled: isProcessing,
-        },
+        { content: "Cancel", onAction: handleClose, disabled: isProcessing },
       ]}
     >
       <Modal.Section>
         <BlockStack gap="400">
+          {/* Count summary */}
           <Text variant="bodyMd" tone="subdued">
-            Add a discount price to {selectedCount} selected variant
-            {selectedCount > 1 ? "s" : ""}
+            Add a discount to{" "}
+            <Text as="span" fontWeight="semibold">
+              {selectedCount} variant{selectedCount > 1 ? "s" : ""}
+            </Text>
           </Text>
 
-          {selectedCount > 1 && (
+          {/* Price range */}
+          {selectedCount > 0 && (
             <div
               style={{
                 padding: "12px",
@@ -454,38 +534,122 @@ const AddDiscountModal = ({
                 <Text variant="bodySm" fontWeight="semibold">
                   Selected variant price range:
                 </Text>
-                <Text variant="bodySm">
-                  Lowest: {currencyCode} {lowestPrice.toFixed(2)}
-                </Text>
-                <Text variant="bodySm">
-                  Highest: {currencyCode} {highestPrice.toFixed(2)}
-                </Text>
+                <InlineStack gap="400">
+                  <Text variant="bodySm">
+                    Lowest: {currencyCode} {lowestPrice.toFixed(2)}
+                  </Text>
+                  <Text variant="bodySm">
+                    Highest: {currencyCode} {highestPrice.toFixed(2)}
+                  </Text>
+                </InlineStack>
               </BlockStack>
             </div>
           )}
 
-          <TextField
-            label="Discount Price"
-            type="number"
-            value={discountPrice}
-            onChange={(value) => {
-              if (Number(value) < 0) return;
-              setDiscountPrice(value);
-            }}
-            placeholder={`e.g., ${lowestPrice > 10 ? (lowestPrice - 10).toFixed(2) : "50"}`}
-            prefix={currencyCode}
-            autoComplete="off"
-            disabled={isProcessing}
-            min="0.01"
-            step="0.01"
-            helpText={`Enter the new sale price (must be less than ${currencyCode} ${lowestPrice.toFixed(2)})`}
-            error={
-              price > 0 && price >= lowestPrice
-                ? `Discount price must be less than ${currencyCode} ${lowestPrice.toFixed(2)}`
-                : undefined
-            }
-          />
+          {/* ✅ Discount mode selector */}
+          <BlockStack gap="200">
+            <Text variant="bodyMd" fontWeight="semibold">
+              Discount type
+            </Text>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <div
+                onClick={() => !isProcessing && setDiscountMode("fixed")}
+                style={{
+                  flex: 1,
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  border: `2px solid ${discountMode === "fixed" ? "#2563eb" : "#e1e3e5"}`,
+                  backgroundColor:
+                    discountMode === "fixed" ? "#eff6ff" : "#fff",
+                  cursor: isProcessing ? "not-allowed" : "pointer",
+                  transition: "all 0.15s ease",
+                  textAlign: "center",
+                }}
+              >
+                <BlockStack gap="100">
+                  <Text
+                    variant="bodyMd"
+                    fontWeight="semibold"
+                    tone={discountMode === "fixed" ? undefined : "subdued"}
+                  >
+                    {currencyCode} Fixed Price
+                  </Text>
+                  <Text variant="bodySm" tone="subdued">
+                    Set an exact sale price
+                  </Text>
+                </BlockStack>
+              </div>
 
+              <div
+                onClick={() => !isProcessing && setDiscountMode("percentage")}
+                style={{
+                  flex: 1,
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  border: `2px solid ${discountMode === "percentage" ? "#2563eb" : "#e1e3e5"}`,
+                  backgroundColor:
+                    discountMode === "percentage" ? "#eff6ff" : "#fff",
+                  cursor: isProcessing ? "not-allowed" : "pointer",
+                  transition: "all 0.15s ease",
+                  textAlign: "center",
+                }}
+              >
+                <BlockStack gap="100">
+                  <Text
+                    variant="bodyMd"
+                    fontWeight="semibold"
+                    tone={discountMode === "percentage" ? undefined : "subdued"}
+                  >
+                    % Percentage Off
+                  </Text>
+                  <Text variant="bodySm" tone="subdued">
+                    Deduct % from each price
+                  </Text>
+                </BlockStack>
+              </div>
+            </div>
+          </BlockStack>
+
+          {/* ✅ Dynamic input based on mode */}
+          {discountMode === "fixed" ? (
+            <TextField
+              label="Sale Price"
+              type="number"
+              value={inputValue}
+              onChange={(v) => {
+                if (Number(v) >= 0) setInputValue(v);
+              }}
+              placeholder={`e.g., ${lowestPrice > 10 ? (lowestPrice - 10).toFixed(2) : "50.00"}`}
+              prefix={currencyCode}
+              autoComplete="off"
+              disabled={isProcessing}
+              min="0.01"
+              step="0.01"
+              helpText={`Must be less than the lowest variant price (${currencyCode} ${lowestPrice.toFixed(2)})`}
+              error={inputError}
+            />
+          ) : (
+            <TextField
+              label="Discount Percentage"
+              type="number"
+              value={inputValue}
+              onChange={(v) => {
+                const num = Number(v);
+                if (num >= 0 && num <= 99) setInputValue(v);
+              }}
+              placeholder="e.g., 20"
+              suffix="%"
+              autoComplete="off"
+              disabled={isProcessing}
+              min="1"
+              max="99"
+              step="1"
+              helpText="Each variant's price will be reduced by this percentage"
+              error={inputError}
+            />
+          )}
+
+          {/* ✅ Preview box
           {isValid && previewVariant && (
             <div
               style={{
@@ -497,51 +661,56 @@ const AddDiscountModal = ({
             >
               <BlockStack gap="200">
                 <Text variant="headingSm" as="h3">
-                  Preview ({previewVariant.productTitle})
+                  Preview — {previewVariant.productTitle}
                 </Text>
-
                 <InlineStack gap="400" blockAlign="center">
                   <div>
                     <Text variant="bodySm" tone="subdued">
                       Original Price
                     </Text>
                     <Text variant="bodyMd" fontWeight="semibold" tone="subdued">
-                      {currencyCode} {originalPrice.toFixed(2)}
+                      {currencyCode} {previewOriginal.toFixed(2)}
                     </Text>
                   </div>
-
                   <div>
                     <Text variant="bodySm" tone="subdued">
                       Discount
                     </Text>
                     <Text variant="bodyMd" tone="critical">
-                      -{currencyCode} {discountAmount.toFixed(2)} (
-                      {discountPercentage}%)
+                      -{currencyCode} {previewDiscount.toFixed(2)} ({previewPct}
+                      %)
                     </Text>
                   </div>
-
                   <div>
                     <Text variant="bodySm" tone="subdued">
                       New Price
                     </Text>
                     <Text variant="bodyMd" fontWeight="bold" tone="success">
-                      {currencyCode} {price.toFixed(2)}
+                      {currencyCode} {previewNew.toFixed(2)}
                     </Text>
                   </div>
                 </InlineStack>
 
+                {discountMode === "percentage" && selectedCount > 1 && (
+                  <Text variant="bodySm" tone="subdued">
+                    * Each variant gets its own price reduced by {inputValue}%
+                  </Text>
+                )}
+
                 <Text variant="bodySm" tone="subdued">
-                  Compare at price will be set to {currencyCode}{" "}
-                  {originalPrice.toFixed(2)}
+                  Compare at price will be set to the original price
                 </Text>
               </BlockStack>
             </div>
-          )}
+          )} */}
 
-          {price > 0 && isValid && (
+          {isValid && (
             <Text variant="bodySm" tone="success">
               ✓ {selectedCount} variant{selectedCount > 1 ? "s" : ""} will be
-              discounted to {currencyCode} {price.toFixed(2)}
+              discounted
+              {discountMode === "percentage"
+                ? ` by ${inputValue}%`
+                : ` to ${currencyCode} ${Number(inputValue).toFixed(2)}`}
             </Text>
           )}
         </BlockStack>
