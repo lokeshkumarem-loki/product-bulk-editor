@@ -269,7 +269,7 @@ export default function ProductTag() {
     ];
     const allCols = rows.flatMap((r) => r.collections);
     const collections = [
-      ...new Map(allCols.map((c) => [c.id || c.title, c])).values(),
+      ...new Map(allCols.map((c) => [c.title, c])).values(),
     ].filter((c) => c.title && c.title !== "—");
 
     return {
@@ -280,7 +280,7 @@ export default function ProductTag() {
       tags: tags.map((t) => ({ label: t, value: t })),
       collections: collections.map((c) => ({
         label: c.title,
-        value: c.id || c.title,
+        value: c.title,
       })),
     };
   }, [rows]);

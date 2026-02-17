@@ -39,8 +39,6 @@ export function VariantsTable({
     });
   }, [variantsData, actionType]);
 
-  console.log(validVariants);
-
   // Filter and sort states
   const [queryValue, setQueryValue] = useState("");
   const [productTypeFilter, setProductTypeFilter] = useState([]);
@@ -83,7 +81,7 @@ export function VariantsTable({
 
     // ✅ Fixed: use collections array properly
     const allCols = validVariants.flatMap((r) =>
-      Array.isArray(r.collections) ? r.collections : [],
+      Array.isArray(r.collection) ? r.collection : [],
     );
     const collections = [
       ...new Map(allCols.map((c) => [c.id || c.title, c])).values(),
@@ -104,7 +102,7 @@ export function VariantsTable({
       })),
       collections: collections.map((c) => ({
         label: c.title,
-        value: c.id || c.title,
+        value: c.title,
       })),
     };
   }, [validVariants]);
@@ -157,12 +155,8 @@ export function VariantsTable({
     if (collectionFilter.length > 0) {
       filtered = filtered.filter(
         (v) =>
-          Array.isArray(v.collections) &&
-          v.collections.some(
-            (c) =>
-              collectionFilter.includes(c.id) ||
-              collectionFilter.includes(c.title),
-          ),
+          Array.isArray(v.collection) &&
+          v.collection?.some((c) => collectionFilter.includes(c.title)),
       );
     }
 
