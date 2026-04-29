@@ -195,12 +195,11 @@ function formatMetafieldValue(value, type) {
       }
 
     case "color":
-      // Remove # if present, Shopify stores without #
+    
       return trimmedValue.replace("#", "").toUpperCase();
 
     case "date_time":
-      // ✅ FIX: Ensure datetime has seconds
-      // Input: 2026-02-16T12:00 → Output: 2026-02-16T12:00:00
+    
       if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmedValue)) {
         return `${trimmedValue}:00`;
       }
@@ -535,7 +534,6 @@ export default function AddMetafield() {
         onRemove: () => setCollectionFilter([]),
       });
     }
-
     if (taggedWith)
       filters.push({
         key: "taggedWith",
@@ -901,7 +899,6 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 }
 
-// ✅ DYNAMIC METAFIELD MODAL
 function AddMetafieldModal({
   selectedResources = [],
   active,
@@ -1011,7 +1008,6 @@ function AddMetafieldModal({
     setErrors({});
   }, [selectedMetafieldKey]);
 
-  // ✅ DYNAMIC INPUT RENDERING
   const renderInputField = () => {
     if (!selectedMetafield) return null;
 
@@ -1262,7 +1258,7 @@ function AddMetafieldModal({
               helpText="Enter the Shopify file GID. You can find this in your Shopify admin under Settings → Files."
             />
 
-            {/* Show validation status */}
+            
             {value && value.startsWith("gid://shopify/") && (
               <div
                 style={{
@@ -1293,7 +1289,7 @@ function AddMetafieldModal({
               </div>
             )}
 
-            {/* Instructions */}
+            
             <Banner tone="info">
               <Text variant="bodySm" as="p">
                 <strong>How to get a file GID:</strong>
