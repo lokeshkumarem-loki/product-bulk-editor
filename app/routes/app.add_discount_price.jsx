@@ -38,12 +38,12 @@ export async function action({ request }) {
       return { success: false, error: "No variants provided" };
     }
 
-    // Group variants by product
+ 
     const variantsByProduct = variantData.reduce((acc, item) => {
       const productId = item.productId;
       if (!acc[productId]) acc[productId] = [];
 
-      // ✅ For percentage mode, each variant already has its own discountPrice
+  
       const finalDiscountPrice =
         mode === "percentage"
           ? parseFloat(
@@ -277,7 +277,7 @@ export default function AddDiscountPricePage() {
   const handleSubmitDiscount = useCallback(
     (finalPrice, percentage, mode) => {
       if (mode === "percentage") {
-        // Compute per-variant discounted price
+      
         const variants = selectedProducts.map((p) => {
           const discounted = parseFloat(
             (p.price - (p.price * percentage) / 100).toFixed(2),
@@ -292,18 +292,16 @@ export default function AddDiscountPricePage() {
         });
 
         const formData = new FormData();
-        // For percentage mode we send variants with individual discountPrices
-        // We re-use discountPrice field as a flag and pass per-variant data
-        formData.append("discountPrice", String(variants[0].discountPrice));
+         formData.append("discountPrice", String(variants[0].discountPrice));
         formData.append("variants", JSON.stringify(variants));
-        // ✅ Send mode so action knows per-variant prices are pre-computed
+     
         formData.append("mode", "percentage");
         formData.append("percentage", String(percentage));
         submit(formData, { method: "post" });
         return;
       }
 
-      // Fixed price mode
+   
       const price = Number(finalPrice);
       if (!price || price <= 0) {
         setToastMessage("Please enter a valid discount price greater than 0");
@@ -397,7 +395,7 @@ export default function AddDiscountPricePage() {
   );
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
+
 
 const AddDiscountModal = ({
   active,
@@ -407,7 +405,7 @@ const AddDiscountModal = ({
   currencyCode,
   selectedProducts,
 }) => {
-  // "fixed" | "percentage"
+
   const [discountMode, setDiscountMode] = useState("fixed");
   const [inputValue, setInputValue] = useState("");
 
@@ -416,16 +414,15 @@ const AddDiscountModal = ({
   const lowestPrice = prices.length ? Math.min(...prices) : 0;
   const highestPrice = prices.length ? Math.max(...prices) : 0;
 
-  // Computed final price shown in preview
   const computedPrice = (() => {
     const val = Number(inputValue);
     if (!val || val <= 0) return 0;
     if (discountMode === "fixed") return val;
-    // percentage: deduct % from lowestPrice for conservative preview
+
     return parseFloat((lowestPrice - (lowestPrice * val) / 100).toFixed(2));
   })();
 
-  // Validation
+
   const inputError = (() => {
     const val = Number(inputValue);
     if (!inputValue || val <= 0) return undefined;
@@ -435,7 +432,6 @@ const AddDiscountModal = ({
       return undefined;
     }
 
-    // fixed mode
     if (val >= lowestPrice)
       return `Must be less than ${currencyCode} ${lowestPrice.toFixed(2)} (lowest variant price)`;
     return undefined;
@@ -448,7 +444,7 @@ const AddDiscountModal = ({
     return val > 0 && val < lowestPrice;
   })();
 
-  // Reset on open/mode change
+
   useEffect(() => {
     setInputValue("");
   }, [discountMode, active]);
@@ -460,26 +456,13 @@ const AddDiscountModal = ({
     if (discountMode === "fixed") {
       handleSubmit(String(val));
     } else {
-      // For each selected product compute its own discounted price
-      // We pass the percentage; parent will compute per-variant prices
-      // But since action expects a single discountPrice, compute per variant
-      // and submit the lowest computed price as a sanity check —
-      // Actually: reuse handleSubmit but pass computed prices per variant.
-      // Since current action uses ONE discountPrice for ALL variants,
-      // we compute: originalPrice - (originalPrice * pct / 100) per variant
-      // and call submit individually. But to keep it simple with the current
-      // action structure, pass each variant its own discountPrice via
-      // a modified submit that sends per-variant prices.
+
       handleSubmitPercentage(val);
     }
   };
 
   const handleSubmitPercentage = (percentage) => {
-    // This calls the parent's submit with per-variant computed prices
-    // We'll pass the percentage and let parent compute — but current action
-    // only accepts single discountPrice. So we use the lowest computed price
-    // as the universal discount for safety, OR pass per-variant.
-    // Since parent handleSubmit only takes a price string, compute each:
+ 
     handleSubmit(null, percentage, discountMode);
   };
 
@@ -513,7 +496,7 @@ const AddDiscountModal = ({
     >
       <Modal.Section>
         <BlockStack gap="400">
-          {/* Count summary */}
+
           <Text variant="bodyMd" tone="subdued">
             Add a discount to{" "}
             <Text as="span" fontWeight="semibold">
@@ -521,7 +504,7 @@ const AddDiscountModal = ({
             </Text>
           </Text>
 
-          {/* Price range */}
+      
           {selectedCount > 0 && (
             <div
               style={{
@@ -546,7 +529,7 @@ const AddDiscountModal = ({
             </div>
           )}
 
-          {/* ✅ Discount mode selector */}
+    
           <BlockStack gap="200">
             <Text variant="bodyMd" fontWeight="semibold">
               Discount type
@@ -610,7 +593,7 @@ const AddDiscountModal = ({
             </div>
           </BlockStack>
 
-          {/* ✅ Dynamic input based on mode */}
+    
           {discountMode === "fixed" ? (
             <TextField
               label="Sale Price"
