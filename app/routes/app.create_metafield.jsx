@@ -61,12 +61,12 @@ export async function action({ request }) {
 
     const result = await response.json();
 
-    // ✅ FIX: Properly handle userErrors array
+    
     const userErrors =
       result?.data?.metafieldDefinitionCreate?.userErrors || [];
 
     if (userErrors.length > 0) {
-      // Convert array of error objects to a single string
+     
       const errorMessage = userErrors.map((err) => err.message).join(", ");
       return { success: false, errors: errorMessage };
     }
@@ -81,7 +81,7 @@ export async function action({ request }) {
       };
     }
 
-    // ✅ FIX: Use 'definitionId' instead of 'id'
+ 
     await admin.graphql(PIN_METAFIELD_DEFINITIONS, {
       variables: {
         definitionId: metafieldId,
@@ -148,7 +148,7 @@ export default function AddMetaFieldsPage() {
       return false;
     }
 
-    // ✅ FIX: Changed from > 4 to < 8
+   
     if (value.length < 8) {
       setNamespaceError(
         "Key is too short (minimum 1 character after 'custom.')",
@@ -252,7 +252,7 @@ export default function AddMetaFieldsPage() {
     submit(formData, { method: "post" });
   };
 
-  // Reset form on success
+
   useEffect(() => {
     if (actionData?.success) {
       setLoading(false);
@@ -271,7 +271,7 @@ export default function AddMetaFieldsPage() {
 
   const isFormValid =
     name.trim().length > 0 &&
-    namespacekey.length >= 8 && // "custom.x" minimum
+    namespacekey.length >= 8 && 
     !namespaceError &&
     !loading;
 
