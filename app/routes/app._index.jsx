@@ -64,7 +64,7 @@ export async function loader({ request }) {
         return { status: "ERROR", error: "Invalid operation ID" };
       }
 
-      // Still running
+ 
       if (bulk.status !== "COMPLETED") {
         return {
           status: bulk.status,
@@ -73,7 +73,6 @@ export async function loader({ request }) {
         };
       }
 
-      // No URL means no results
       if (!bulk.url) {
         return {
           status: "ERROR",
@@ -107,7 +106,6 @@ export async function loader({ request }) {
           if (id.includes("/Product/") && !row.__parentId) {
             products.push(row);
           }
-          // Variant (child of product)
           else if (id.includes("/ProductVariant/")) {
             const productId = row.__parentId;
             if (!variantMap.has(productId)) {
@@ -115,7 +113,6 @@ export async function loader({ request }) {
             }
             variantMap.get(productId).push(row);
           }
-          // Collection (child of product)
           else if (id.includes("/Collection/")) {
             const productId = row.__parentId;
             if (!collectionMap.has(productId)) {
@@ -154,7 +151,6 @@ export async function loader({ request }) {
           };
         });
 
-        // Extract all variants with product context
         const allVariants = [];
         products.forEach((product) => {
           const productVariants = variantMap.get(product.id) || [];
@@ -216,7 +212,6 @@ export async function loader({ request }) {
       return { status: "ERROR", error: `Unknown step: ${step}` };
     }
 
-    // ================= START NEW OPERATION =================
     if (!step) return { status: "IDLE" };
 
     let mutation;
@@ -281,7 +276,6 @@ export default function Index() {
   const [variantCount, setVariantCount] = useState(0);
   const pollingTimeoutRef = useRef(null);
 
-  // Cleanup polling on unmount
   useEffect(() => {
     return () => {
       if (pollingTimeoutRef.current) {
@@ -290,7 +284,6 @@ export default function Index() {
     };
   }, []);
 
-  // Polling function
   const pollStatus = useCallback(
     (operationId, currentStep) => {
       if (!loading) {
@@ -300,17 +293,14 @@ export default function Index() {
     },
     [loading, navigate],
   );
-
-  // Handle loader data updates
+  
   useEffect(() => {
     if (!loaderData) return;
-    // Clear any existing polling timeout
     if (pollingTimeoutRef.current) {
       clearTimeout(pollingTimeoutRef.current);
       pollingTimeoutRef.current = null;
     }
 
-    // Handle errors
     if (loaderData.status === "ERROR") {
       setError(loaderData.error || "An error occurred");
       setStatusText("Sync failed");
@@ -318,18 +308,15 @@ export default function Index() {
       return;
     }
 
-    // Handle operation started
     if (loaderData.status === "STARTED") {
       setCurrentOperationId(loaderData.operationId);
       setStatusText(`Starting syncing...`);
 
-      // Start polling after 2 seconds
       pollingTimeoutRef.current = setTimeout(() => {
         pollStatus(loaderData.operationId, loaderData.step);
       }, 2000);
     }
 
-    // Handle in-progress statuses
     if (
       loaderData.status === "RUNNING" ||
       loaderData.status === "CREATED" ||
@@ -337,13 +324,11 @@ export default function Index() {
     ) {
       setStatusText("Processing data....");
 
-      // Continue polling every 3 seconds
       pollingTimeoutRef.current = setTimeout(() => {
         pollStatus(currentOperationId, step);
       }, 3000);
     }
 
-    // Handle step completed
     if (loaderData.status === "STEP_COMPLETED") {
       const count = loaderData.count || 0;
       const vCount = loaderData.variantCount || 0;
@@ -361,7 +346,6 @@ export default function Index() {
       }
     }
 
-    // Handle completion
     if (loaderData.status === "DONE") {
       const count = loaderData.count || 0;
       setItemCount((prev) => prev + count);
@@ -371,7 +355,6 @@ export default function Index() {
 
       pollingTimeoutRef.current = setTimeout(() => {
         setModalActive(false);
-        // Reset state after modal closes
         setTimeout(() => {
           setProgress(0);
           setStep(null);
@@ -382,7 +365,6 @@ export default function Index() {
       }, 3000);
     }
 
-    // Handle canceled/failed
     if (loaderData.status === "CANCELED") {
       setError("Sync was canceled");
       setStatusText("Sync canceled");
@@ -397,7 +379,6 @@ export default function Index() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaderData]);
 
-  /* ================= START SYNC ================= */
   function startSync(currentStep) {
     setLoading(true);
     setStep(currentStep);
@@ -411,13 +392,11 @@ export default function Index() {
       setVariantCount(0);
     }
 
-    // Clear any existing timeout
     if (pollingTimeoutRef.current) {
       clearTimeout(pollingTimeoutRef.current);
       pollingTimeoutRef.current = null;
     }
-
-    // Navigate to trigger loader
+    
     navigate(`?step=${currentStep}`);
   }
 
@@ -441,7 +420,6 @@ export default function Index() {
       setVariantCount(0);
       setCurrentOperationId(null);
 
-      // Clear polling timeout
       if (pollingTimeoutRef.current) {
         clearTimeout(pollingTimeoutRef.current);
         pollingTimeoutRef.current = null;
@@ -454,7 +432,6 @@ export default function Index() {
     setLoading(false);
     setStatusText("Cancelling sync...");
 
-    // Clear polling timeout
     if (pollingTimeoutRef.current) {
       clearTimeout(pollingTimeoutRef.current);
       pollingTimeoutRef.current = null;
@@ -464,14 +441,12 @@ export default function Index() {
   return (
     <Page fullWidth>
       <BlockStack gap="500">
-        {/* ERROR BANNER */}
         {error && !modalActive && (
           <Banner tone="critical" onDismiss={() => setError(null)}>
             <Text as="p">{error}</Text>
           </Banner>
         )}
 
-        {/* HERO CARD */}
         <Card padding="500">
           <BlockStack gap="300">
             <Text variant="headingLg">Bulk Product Editor</Text>
@@ -493,7 +468,6 @@ export default function Index() {
           </BlockStack>
         </Card>
 
-        {/* HOW IT WORKS */}
         <BlockStack gap="200">
           <Text variant="headingMd">How it works</Text>
           <Text tone="subdued">
@@ -546,7 +520,6 @@ export default function Index() {
           />
         </div>
 
-        {/* CTA */}
         <Card padding="500">
           <BlockStack gap="300">
             <Text variant="headingSm">Data-first bulk editing</Text>
@@ -558,7 +531,6 @@ export default function Index() {
         </Card>
       </BlockStack>
 
-      {/* SYNC MODAL */}
       <Modal
         open={modalActive}
         onClose={handleModalClose}
@@ -601,7 +573,6 @@ export default function Index() {
   );
 }
 
-/* ================= STEP CARD COMPONENT ================= */
 function StepCard({ icon, title, desc }) {
   return (
     <Card padding="400">
